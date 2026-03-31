@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 4: サーバー状態管理</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; }
+    #status { padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; font-weight: bold; display: inline-block; }
+    .connected    { background: #155724; }
+    .disconnected { background: #721c24; }
+    #myId { margin-bottom: 12px; color: #aaa; }
+    canvas { border: 2px solid #444; background: #0f3460; display: block; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .hint { color: #888; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Step 4: サーバー状態管理</h1>
+
+  <div id="status" class="disconnected">切断中</div>
+  <div id="myId">自分のID: なし</div>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <!-- ゲームフィールド -->
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <p class="hint">矢印キーで移動 / 接続を複数タブで開いて全員の位置が同期されることを確認する</p>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    let ws     = null;
+    let myId   = null;
+    let state  = { players: {} }; // サーバーから受け取る最新のゲーム状態
+
+    const status    = document.getElementById('status');
+    const myIdEl    = document.getElementById('myId');
+    const btnConn   = document.getElementById('btnConnect');
+    const btnDisc   = document.getElementById('btnDisconnect');
+
+    // --- 接続管理 ---
+
+    function setUI(connected) {
+      status.textContent = connected ? '接続中' : '切断中';
+      status.className   = connected ? 'connected' : 'disconnected';
+      btnConn.disabled   = connected;
+      btnDisc.disabled   = !connected;
+    }
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => setUI(true);
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.myId) {
+          // サーバーから自分のIDが通知された
+          myId = msg.myId;
+          myIdEl.textContent = `自分のID: ${myId}`;
+        }
+
+        if (msg.type === 'state') {
+          // サーバーからの状態更新 → そのまま保持する
+          // クライアントは「受け取って表示するだけ」
+          state = msg;
+          draw();
+        }
+      };
+
+      ws.onclose = () => {
+        setUI(false);
+        myId = null;
+        myIdEl.textContent = '自分のID: なし';
+        state = { players: {} };
+        draw();
+        ws = null;
+      };
+
+      ws.onerror = () => console.error('WebSocket エラー');
+    });
+
+    btnDisc.addEventListener('click', () => { if (ws) ws.close(); });
+
+    // --- 入力処理 ---
+
+    document.addEventListener('keydown', (e) => {
+      let direction = null;
+      switch (e.key) {
+        case 'ArrowUp':    direction = 'up';    break;
+        case 'ArrowDown':  direction = 'down';  break;
+        case 'ArrowLeft':  direction = 'left';  break;
+        case 'ArrowRight': direction = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      // 入力だけ送る（座標は送らない）
+      ws.send(JSON.stringify({ type: 'input', direction }));
+    });
+
+    // --- 描画処理 ---
+    // クライアントの役割はここだけ：サーバーから受け取った状態を描画する
+
+    function draw() {
+      // キャンバスをクリア
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 背景グリッド
+      ctx.strokeStyle = '#1a3a6e';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 50) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 50) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      // プレイヤーを描画（サーバーから受け取った位置に）
+      if (!state.players) return;
+
+      for (const [id, player] of Object.entries(state.players)) {
+        const isMe = id === myId;
+
+        // プレイヤーの丸
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, isMe ? 18 : 14, 0, Math.PI * 2);
+        ctx.fillStyle = player.color;
+        ctx.fill();
+
+        // 自分は枠線付き
+        if (isMe) {
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
+        // 方向を示す小さな矢印
+        drawArrow(player.x, player.y, player.direction);
+
+        // プレイヤーID表示
+        ctx.fillStyle = isMe ? 'white' : '#ccc';
+        ctx.font = `${isMe ? 'bold ' : ''}12px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(isMe ? `★ ${id}` : id, player.x, player.y - 22);
+      }
+    }
+
+    // 方向を示す矢印を描画
+    function drawArrow(x, y, direction) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      const arrows = { up: '↑', down: '↓', left: '←', right: '→' };
+      ctx.fillText(arrows[direction] || '', x, y + 5);
+    }
+
+    // 初期描画（空のキャンバス）
+    draw();
+  </script>
+</body>
+</html>

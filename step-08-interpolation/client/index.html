@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 8: 補間</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; }
+    .canvases { display: flex; gap: 10px; flex-wrap: wrap; }
+    .view { flex: 1; min-width: 380px; }
+    .view h3 { color: #aaa; margin-bottom: 4px; font-size: 14px; }
+    canvas { border: 2px solid #444; display: block; width: 100%; }
+    .controls { margin-bottom: 12px; display: flex; gap: 8px; align-items: center; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #info { font-size: 13px; color: #aaa; margin-bottom: 12px; display: flex; gap: 20px; }
+    .hint { color: #666; font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Step 8: 補間（Interpolation）</h1>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+    <span id="status" style="color:#aaa">切断中</span>
+  </div>
+
+  <div id="info">
+    <span>Tick: <span id="tickEl">0</span></span>
+    <span>自分のID: <span id="myIdEl">なし</span></span>
+    <span>補間係数(t): <span id="tEl">0.00</span></span>
+  </div>
+
+  <!-- 補間なし/ありを並べて比較 -->
+  <div class="canvases">
+    <div class="view">
+      <h3>❌ 補間なし（受け取ったらすぐ描画）</h3>
+      <canvas id="rawCanvas" width="390" height="300"></canvas>
+    </div>
+    <div class="view">
+      <h3>✅ 補間あり（前後の位置をなめらかに補間）</h3>
+      <canvas id="interpCanvas" width="390" height="300"></canvas>
+    </div>
+  </div>
+
+  <p class="hint">
+    矢印キーで移動 / サーバーの tickRate を遅く（500ms など）設定すると補間の効果が分かりやすい
+  </p>
+
+  <script>
+    const GRID = 20;
+
+    // 2つのキャンバス
+    const rawCanvas    = document.getElementById('rawCanvas');
+    const rawCtx       = rawCanvas.getContext('2d');
+    const interpCanvas = document.getElementById('interpCanvas');
+    const interpCtx    = interpCanvas.getContext('2d');
+
+    let ws    = null;
+    let myId  = null;
+
+    // --- 補間用の状態 ---
+    // 「前のスナップショット」と「次のスナップショット」を持つ
+    let prevSnapshot       = null;  // 1つ前のサーバー状態
+    let nextSnapshot       = null;  // 最新のサーバー状態
+    let prevSnapshotTime   = 0;     // prevSnapshot を受け取った時刻
+    let nextSnapshotTime   = 0;     // nextSnapshot を受け取った時刻
+
+    // 補間なし用（単純に最新状態を持つ）
+    let rawState = { snakes: {} };
+
+    const statusEl = document.getElementById('status');
+    const tickEl   = document.getElementById('tickEl');
+    const myIdEl   = document.getElementById('myIdEl');
+    const tEl      = document.getElementById('tEl');
+    const btnConn  = document.getElementById('btnConnect');
+    const btnDisc  = document.getElementById('btnDisconnect');
+
+    function setUI(connected) {
+      statusEl.textContent = connected ? '接続中' : '切断中';
+      statusEl.style.color = connected ? '#4ecdc4' : '#aaa';
+      btnConn.disabled     = connected;
+      btnDisc.disabled     = !connected;
+    }
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => setUI(true);
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        const now = Date.now();
+
+        if (msg.myId) {
+          myId = msg.myId;
+          myIdEl.textContent = myId;
+        }
+
+        if (msg.type === 'state' && msg.snakes) {
+          // 補間なし: 最新状態をそのまま保持
+          rawState = msg;
+
+          // 補間あり: 前の状態を保存してから新しい状態を設定
+          if (nextSnapshot !== null) {
+            prevSnapshot     = nextSnapshot;
+            prevSnapshotTime = nextSnapshotTime;
+          } else {
+            // 初回は同じものを入れる
+            prevSnapshot     = msg;
+            prevSnapshotTime = now;
+          }
+          nextSnapshot     = msg;
+          nextSnapshotTime = now;
+
+          tickEl.textContent = msg.tickCount;
+        }
+      };
+
+      ws.onclose = () => {
+        setUI(false);
+        ws = null;
+        rawState = { snakes: {} };
+        prevSnapshot = null;
+        nextSnapshot = null;
+      };
+
+      ws.onerror = () => console.error('WebSocket エラー');
+    });
+
+    btnDisc.addEventListener('click', () => { if (ws) ws.close(); });
+
+    // キー入力
+    document.addEventListener('keydown', (e) => {
+      let dir = null;
+      switch (e.key) {
+        case 'ArrowUp':    dir = 'up';    break;
+        case 'ArrowDown':  dir = 'down';  break;
+        case 'ArrowLeft':  dir = 'left';  break;
+        case 'ArrowRight': dir = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', direction: dir }));
+    });
+
+    // --- 線形補間 ---
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    // 補間係数 t を計算する（0.0〜1.0）
+    function calcT() {
+      if (!prevSnapshot || !nextSnapshot) return 0;
+      const now      = Date.now();
+      const elapsed  = now - prevSnapshotTime;
+      const duration = nextSnapshotTime - prevSnapshotTime;
+      if (duration <= 0) return 1;
+      return Math.min(elapsed / duration, 1.0);
+    }
+
+    // --- ゲームループ（requestAnimationFrame） ---
+    // サーバーからの受信に関係なく、毎フレーム描画する
+    function gameLoop() {
+      // 補間なし: 受け取った状態をそのまま描画
+      drawRaw();
+
+      // 補間あり: 前後のスナップショットを補間して描画
+      const t = calcT();
+      tEl.textContent = t.toFixed(2);
+      drawInterpolated(t);
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // --- 描画：補間なし ---
+    function drawRaw() {
+      drawBackground(rawCtx, rawCanvas);
+      if (!rawState.snakes) return;
+      for (const [id, snake] of Object.entries(rawState.snakes)) {
+        if (!snake.body) continue;
+        drawSnakeAt(rawCtx, snake, snake.body, id === myId);
+      }
+    }
+
+    // --- 描画：補間あり ---
+    function drawInterpolated(t) {
+      drawBackground(interpCtx, interpCanvas);
+      if (!nextSnapshot || !nextSnapshot.snakes) return;
+
+      for (const [id, nextSnake] of Object.entries(nextSnapshot.snakes)) {
+        if (!nextSnake.body) continue;
+
+        // 補間後のbody位置を計算する
+        let interpBody;
+
+        if (prevSnapshot && prevSnapshot.snakes && prevSnapshot.snakes[id]) {
+          const prevSnake = prevSnapshot.snakes[id];
+          // prevとnextのbodyが同じ長さであれば補間する
+          const len = Math.min(prevSnake.body.length, nextSnake.body.length);
+          interpBody = [];
+          for (let i = 0; i < len; i++) {
+            interpBody.push({
+              x: lerp(prevSnake.body[i].x, nextSnake.body[i].x, t),
+              y: lerp(prevSnake.body[i].y, nextSnake.body[i].y, t),
+            });
+          }
+        } else {
+          // 前の状態がなければそのまま
+          interpBody = nextSnake.body;
+        }
+
+        drawSnakeAt(interpCtx, nextSnake, interpBody, id === myId);
+      }
+    }
+
+    // 背景を描画
+    function drawBackground(ctx, canvas) {
+      ctx.fillStyle = '#0f3460';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      for (let x = 0; x < canvas.width; x += GRID) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += GRID) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+    }
+
+    // 指定した body 位置で蛇を描画
+    function drawSnakeAt(ctx, snake, body, isMe) {
+      for (let i = 0; i < body.length; i++) {
+        const seg = body[i];
+        ctx.fillStyle = i === 0 ? snake.color : 'rgba(100,100,100,0.6)';
+        ctx.fillRect(seg.x + 1, seg.y + 1, GRID - 2, GRID - 2);
+      }
+      if (isMe && body.length > 0) {
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(body[0].x, body[0].y, GRID, GRID);
+      }
+    }
+
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>

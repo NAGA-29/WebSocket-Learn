@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 9: 10人部屋</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; }
+    #info { display: flex; gap: 20px; margin-bottom: 12px; font-size: 14px; color: #aaa; flex-wrap: wrap; }
+    #status { padding: 6px 12px; border-radius: 4px; font-weight: bold; }
+    .connected    { background: #155724; }
+    .disconnected { background: #721c24; }
+    canvas { border: 2px solid #444; display: block; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .hint { color: #888; font-size: 13px; margin-top: 8px; }
+    #roomInfo {
+      background: rgba(0,0,0,0.4);
+      border: 1px solid #333;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Step 9: 10人部屋</h1>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <!-- 部屋情報 -->
+  <div id="roomInfo">
+    <span>部屋ID: <strong id="roomIdEl">なし</strong></span> /
+    <span>人数: <strong id="countEl">0</strong> / 10人</span>
+  </div>
+
+  <div id="info">
+    <span id="status" class="disconnected">切断中</span>
+    <span>自分: <span id="myIdEl">なし</span></span>
+    <span>スコア: <span id="myScoreEl">0</span></span>
+  </div>
+
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <p class="hint">
+    10人以上接続すると自動で2つ目の部屋が作られます<br>
+    矢印キーで移動 / 同じ部屋のプレイヤーだけが表示されます
+  </p>
+
+  <script>
+    const GRID = 20;
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    let ws    = null;
+    let myId  = null;
+    let state = { snakes: {}, foods: [] };
+
+    const statusEl  = document.getElementById('status');
+    const myIdEl    = document.getElementById('myIdEl');
+    const myScoreEl = document.getElementById('myScoreEl');
+    const roomIdEl  = document.getElementById('roomIdEl');
+    const countEl   = document.getElementById('countEl');
+    const btnConn   = document.getElementById('btnConnect');
+    const btnDisc   = document.getElementById('btnDisconnect');
+
+    function setUI(connected) {
+      statusEl.textContent = connected ? '接続中' : '切断中';
+      statusEl.className   = connected ? 'connected' : 'disconnected';
+      btnConn.disabled     = connected;
+      btnDisc.disabled     = !connected;
+    }
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => setUI(true);
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.myId) {
+          myId = msg.myId;
+          myIdEl.textContent = myId;
+        }
+        if (msg.roomId) {
+          roomIdEl.textContent = msg.roomId;
+        }
+
+        if (msg.type === 'state') {
+          state = msg;
+          countEl.textContent = msg.count || 0;
+
+          const mySnake = state.snakes && state.snakes[myId];
+          if (mySnake) myScoreEl.textContent = mySnake.score;
+
+          draw();
+        }
+      };
+
+      ws.onclose = () => {
+        setUI(false);
+        ws = null;
+        myId = null;
+        state = { snakes: {}, foods: [] };
+        roomIdEl.textContent = 'なし';
+        countEl.textContent = '0';
+        draw();
+      };
+
+      ws.onerror = () => console.error('WebSocket エラー');
+    });
+
+    btnDisc.addEventListener('click', () => { if (ws) ws.close(); });
+
+    document.addEventListener('keydown', (e) => {
+      let dir = null;
+      switch (e.key) {
+        case 'ArrowUp':    dir = 'up';    break;
+        case 'ArrowDown':  dir = 'down';  break;
+        case 'ArrowLeft':  dir = 'left';  break;
+        case 'ArrowRight': dir = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', direction: dir }));
+    });
+
+    function draw() {
+      ctx.fillStyle = '#0f3460';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      for (let x = 0; x < canvas.width; x += GRID) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += GRID) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      // エサ
+      if (state.foods) {
+        for (const food of state.foods) {
+          ctx.fillStyle = '#ffdd57';
+          ctx.beginPath();
+          ctx.arc(food.x + GRID/2, food.y + GRID/2, GRID/2 - 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // 蛇
+      if (state.snakes) {
+        for (const [id, snake] of Object.entries(state.snakes)) {
+          if (!snake.body) continue;
+          const isMe = id === myId;
+          for (let i = 0; i < snake.body.length; i++) {
+            const seg = snake.body[i];
+            ctx.fillStyle = i === 0 ? snake.color : `rgba(80,80,80,0.7)`;
+            ctx.fillRect(seg.x + 1, seg.y + 1, GRID - 2, GRID - 2);
+          }
+          if (isMe && snake.body.length > 0) {
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(snake.body[0].x, snake.body[0].y, GRID, GRID);
+          }
+          // 名前表示
+          if (snake.body.length > 0) {
+            ctx.fillStyle = isMe ? 'white' : '#aaa';
+            ctx.font = '11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(
+              `${isMe ? '★' : ''}${id}(${snake.score})`,
+              snake.body[0].x + GRID/2,
+              snake.body[0].y - 4
+            );
+          }
+        }
+      }
+    }
+
+    draw();
+  </script>
+</body>
+</html>

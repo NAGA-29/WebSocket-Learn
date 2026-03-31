@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 11: 最適化</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; }
+    canvas { border: 2px solid #444; display: block; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .stat-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 10px;
+    }
+    .stat-card .label { font-size: 11px; color: #888; margin-bottom: 4px; }
+    .stat-card .value { font-size: 20px; font-weight: bold; color: #4ecdc4; }
+    .stat-card .unit  { font-size: 11px; color: #666; }
+    #sizeGraph {
+      background: #0a0a1a;
+      border: 1px solid #333;
+      display: block;
+      margin-top: 8px;
+    }
+    .hint { color: #888; font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Step 11: 最適化を考える</h1>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <!-- 統計パネル -->
+  <div id="stats">
+    <div class="stat-card">
+      <div class="label">全量サイズ（受信）</div>
+      <div class="value" id="fullSizeEl">-</div>
+      <div class="unit">bytes / tick</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">軽量版サイズ（推定）</div>
+      <div class="value" id="lightSizeEl">-</div>
+      <div class="unit">bytes / tick</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">削減率</div>
+      <div class="value" id="ratioEl">-</div>
+      <div class="unit">%削減</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">プレイヤー数</div>
+      <div class="value" id="playerCountEl">0</div>
+      <div class="unit">人</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">推定帯域（全量）</div>
+      <div class="value" id="bandwidthEl">-</div>
+      <div class="unit">bytes/秒</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Tick</div>
+      <div class="value" id="tickEl">0</div>
+      <div class="unit"></div>
+    </div>
+  </div>
+
+  <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+  <!-- サイズ推移グラフ -->
+  <canvas id="sizeGraph" width="800" height="80"></canvas>
+
+  <p class="hint">
+    複数タブを開いてプレイヤーを増やすと全量サイズが増えます<br>
+    矢印キーで移動 / サーバーのログでも比較できます
+  </p>
+
+  <script>
+    const GRID = 20;
+    const canvas     = document.getElementById('gameCanvas');
+    const ctx        = canvas.getContext('2d');
+    const graphCanvas = document.getElementById('sizeGraph');
+    const graphCtx   = graphCanvas.getContext('2d');
+
+    let ws    = null;
+    let myId  = null;
+    let state = { snakes: {} };
+
+    // サイズ履歴（グラフ表示用）
+    const sizeHistory = [];
+    const MAX_HISTORY = 80;
+
+    const fullSizeEl    = document.getElementById('fullSizeEl');
+    const lightSizeEl   = document.getElementById('lightSizeEl');
+    const ratioEl       = document.getElementById('ratioEl');
+    const playerCountEl = document.getElementById('playerCountEl');
+    const bandwidthEl   = document.getElementById('bandwidthEl');
+    const tickEl        = document.getElementById('tickEl');
+    const btnConn       = document.getElementById('btnConnect');
+    const btnDisc       = document.getElementById('btnDisconnect');
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => {
+        btnConn.disabled = true;
+        btnDisc.disabled = false;
+      };
+
+      ws.onmessage = (event) => {
+        // 受信サイズを計測（Blob API で正確に計測）
+        const receivedSize = new Blob([event.data]).size;
+
+        const msg = JSON.parse(event.data);
+
+        if (msg.myId) {
+          myId = msg.myId;
+        }
+
+        if (msg.type === 'state' && msg.snakes) {
+          state = msg;
+          draw();
+        }
+
+        if (msg.type === 'stats') {
+          // サーバーから送られる統計情報を表示
+          fullSizeEl.textContent    = msg.fullSize;
+          lightSizeEl.textContent   = msg.lightSize;
+          const ratio = ((1 - msg.lightSize / msg.fullSize) * 100).toFixed(1);
+          ratioEl.textContent       = ratio;
+          playerCountEl.textContent = msg.playerCount;
+          tickEl.textContent        = msg.tickCount;
+
+          // 推定帯域（10tick/秒 × バイト数）
+          bandwidthEl.textContent   = (msg.fullSize * 10).toLocaleString();
+
+          // 履歴に追加
+          sizeHistory.push({ full: msg.fullSize, light: msg.lightSize });
+          if (sizeHistory.length > MAX_HISTORY) sizeHistory.shift();
+
+          drawGraph();
+        }
+      };
+
+      ws.onclose = () => {
+        btnConn.disabled = false;
+        btnDisc.disabled = true;
+        ws = null;
+        state = { snakes: {} };
+        draw();
+      };
+    });
+
+    btnDisc.addEventListener('click', () => { if (ws) ws.close(); });
+
+    document.addEventListener('keydown', (e) => {
+      let dir = null;
+      switch (e.key) {
+        case 'ArrowUp':    dir = 'up';    break;
+        case 'ArrowDown':  dir = 'down';  break;
+        case 'ArrowLeft':  dir = 'left';  break;
+        case 'ArrowRight': dir = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', direction: dir }));
+    });
+
+    // サイズ推移グラフ
+    function drawGraph() {
+      graphCtx.fillStyle = '#0a0a1a';
+      graphCtx.fillRect(0, 0, graphCanvas.width, graphCanvas.height);
+
+      if (sizeHistory.length < 2) return;
+
+      const maxSize = Math.max(...sizeHistory.map(h => h.full), 1000);
+      const w = graphCanvas.width;
+      const h = graphCanvas.height;
+      const step = w / MAX_HISTORY;
+
+      // 全量サイズ（青）
+      graphCtx.strokeStyle = '#45b7d1';
+      graphCtx.lineWidth = 1.5;
+      graphCtx.beginPath();
+      for (let i = 0; i < sizeHistory.length; i++) {
+        const x = i * step;
+        const y = h - (sizeHistory[i].full / maxSize * h * 0.9);
+        if (i === 0) graphCtx.moveTo(x, y);
+        else graphCtx.lineTo(x, y);
+      }
+      graphCtx.stroke();
+
+      // 軽量版サイズ（緑）
+      graphCtx.strokeStyle = '#4ecdc4';
+      graphCtx.lineWidth = 1.5;
+      graphCtx.beginPath();
+      for (let i = 0; i < sizeHistory.length; i++) {
+        const x = i * step;
+        const y = h - (sizeHistory[i].light / maxSize * h * 0.9);
+        if (i === 0) graphCtx.moveTo(x, y);
+        else graphCtx.lineTo(x, y);
+      }
+      graphCtx.stroke();
+
+      // 凡例
+      graphCtx.font = '10px monospace';
+      graphCtx.fillStyle = '#45b7d1';
+      graphCtx.fillText('── 全量', 5, 12);
+      graphCtx.fillStyle = '#4ecdc4';
+      graphCtx.fillText('── 軽量版', 5, 24);
+    }
+
+    function draw() {
+      ctx.fillStyle = '#0f3460';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      for (let x = 0; x < canvas.width; x += GRID) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += GRID) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      if (!state.snakes) return;
+      for (const [id, snake] of Object.entries(state.snakes)) {
+        if (!snake.body) continue;
+        const isMe = id === myId;
+        for (let i = 0; i < snake.body.length; i++) {
+          const seg = snake.body[i];
+          ctx.fillStyle = i === 0 ? snake.color : 'rgba(80,80,80,0.6)';
+          ctx.fillRect(seg.x + 1, seg.y + 1, GRID - 2, GRID - 2);
+        }
+        if (isMe && snake.body.length > 0) {
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(snake.body[0].x, snake.body[0].y, GRID, GRID);
+        }
+      }
+    }
+
+    draw();
+    drawGraph();
+  </script>
+</body>
+</html>

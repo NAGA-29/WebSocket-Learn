@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 7: 遅延体験</title>
+  <style>
+    body { font-family: monospace; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; font-family: sans-serif; }
+    canvas { border: 2px solid #444; display: block; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #debugPanel {
+      background: rgba(0,0,0,0.8);
+      border: 1px solid #333;
+      padding: 12px;
+      margin-top: 12px;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    #intervalGraph {
+      background: #0a0a1a;
+      border: 1px solid #333;
+      display: block;
+      margin-top: 8px;
+    }
+    .bad { color: #ff6b6b; }
+    .ok  { color: #ffeaa7; }
+    .good { color: #4ecdc4; }
+  </style>
+</head>
+<body>
+  <h1>Step 7: 遅延と同期ズレを体験する</h1>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+  <!-- リアルタイム統計パネル -->
+  <div id="debugPanel">
+    <div>状態: <span id="connStatus">切断中</span></div>
+    <div>Tick: <span id="tickCount">0</span></div>
+    <div>受信間隔: <span id="interval">-</span> ms</div>
+    <div>最小/平均/最大: <span id="stats">-</span> ms</div>
+    <div>サーバー遅延適用: <span id="serverDelay">-</span> ms</div>
+    <div>往復遅延(概算): <span id="rtt">-</span> ms</div>
+  </div>
+
+  <!-- 受信間隔グラフ -->
+  <canvas id="intervalGraph" width="800" height="100"></canvas>
+
+  <p style="color: #888; font-size: 13px;">
+    ⚠️ main.go の <code>tickRate</code> と <code>maxRandomDelayMs</code> を変えて試してください
+  </p>
+
+  <script>
+    const GRID = 20;
+
+    const canvas    = document.getElementById('gameCanvas');
+    const ctx       = canvas.getContext('2d');
+    const graphCanvas = document.getElementById('intervalGraph');
+    const graphCtx  = graphCanvas.getContext('2d');
+
+    let ws    = null;
+    let myId  = null;
+    let state = { snakes: {} };
+
+    // 遅延計測用の変数
+    let lastReceived     = null;
+    let intervals        = []; // 受信間隔の履歴（最新50件）
+    const MAX_HISTORY    = 50;
+
+    const connStatus  = document.getElementById('connStatus');
+    const tickEl      = document.getElementById('tickCount');
+    const intervalEl  = document.getElementById('interval');
+    const statsEl     = document.getElementById('stats');
+    const serverDelay = document.getElementById('serverDelay');
+    const rttEl       = document.getElementById('rtt');
+    const btnConn     = document.getElementById('btnConnect');
+    const btnDisc     = document.getElementById('btnDisconnect');
+
+    function setUI(connected) {
+      connStatus.textContent = connected ? '接続中' : '切断中';
+      btnConn.disabled       = connected;
+      btnDisc.disabled       = !connected;
+    }
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => setUI(true);
+
+      ws.onmessage = (event) => {
+        const now = Date.now();
+        const msg = JSON.parse(event.data);
+
+        if (msg.myId) {
+          myId = msg.myId;
+        }
+
+        if (msg.type === 'state' && msg.snakes) {
+          state = msg;
+
+          // 受信間隔を計測
+          if (lastReceived !== null) {
+            const interval = now - lastReceived;
+            intervals.push(interval);
+            if (intervals.length > MAX_HISTORY) {
+              intervals.shift();
+            }
+
+            // 統計を更新
+            updateStats(interval, msg);
+          }
+          lastReceived = now;
+
+          draw();
+          drawGraph();
+        }
+      };
+
+      ws.onclose = () => {
+        setUI(false);
+        ws = null;
+        state = { snakes: {} };
+        draw();
+      };
+    });
+
+    btnDisc.addEventListener('click', () => { if (ws) ws.close(); });
+
+    function updateStats(interval, msg) {
+      // 受信間隔の色分け
+      const color = interval > 200 ? 'bad' : interval > 130 ? 'ok' : 'good';
+      intervalEl.innerHTML = `<span class="${color}">${interval}</span>`;
+
+      if (intervals.length > 0) {
+        const min = Math.min(...intervals);
+        const max = Math.max(...intervals);
+        const avg = Math.round(intervals.reduce((a, b) => a + b, 0) / intervals.length);
+        const avgColor = avg > 200 ? 'bad' : avg > 130 ? 'ok' : 'good';
+        statsEl.innerHTML = `${min} / <span class="${avgColor}">${avg}</span> / ${max}`;
+      }
+
+      tickEl.textContent = msg.tickCount;
+
+      // サーバーが適用した遅延
+      serverDelay.textContent = msg.delayApplied || 0;
+
+      // 往復遅延の概算（サーバー送信時刻 vs 受信時刻）
+      if (msg.serverTime) {
+        const rtt = Date.now() - msg.serverTime;
+        const rttColor = rtt > 100 ? 'bad' : rtt > 50 ? 'ok' : 'good';
+        rttEl.innerHTML = `<span class="${rttColor}">${rtt}</span>`;
+      }
+    }
+
+    // 受信間隔のグラフを描画
+    function drawGraph() {
+      graphCtx.fillStyle = '#0a0a1a';
+      graphCtx.fillRect(0, 0, graphCanvas.width, graphCanvas.height);
+
+      if (intervals.length < 2) return;
+
+      const maxVal = Math.max(...intervals, 200);
+      const w      = graphCanvas.width;
+      const h      = graphCanvas.height;
+      const step   = w / MAX_HISTORY;
+
+      // 基準線（100ms）
+      graphCtx.strokeStyle = 'rgba(78, 205, 196, 0.3)';
+      graphCtx.lineWidth = 1;
+      graphCtx.setLineDash([5, 5]);
+      const y100 = h - (100 / maxVal * h);
+      graphCtx.beginPath();
+      graphCtx.moveTo(0, y100);
+      graphCtx.lineTo(w, y100);
+      graphCtx.stroke();
+      graphCtx.setLineDash([]);
+
+      // ラベル
+      graphCtx.fillStyle = 'rgba(78, 205, 196, 0.5)';
+      graphCtx.font = '10px monospace';
+      graphCtx.fillText('100ms', 5, y100 - 3);
+
+      // グラフ
+      graphCtx.beginPath();
+      graphCtx.strokeStyle = '#4ecdc4';
+      graphCtx.lineWidth = 1.5;
+
+      const startIdx = Math.max(0, intervals.length - MAX_HISTORY);
+      for (let i = 0; i < intervals.length; i++) {
+        const x = i * step;
+        const y = h - (intervals[i] / maxVal * h);
+        if (i === 0) {
+          graphCtx.moveTo(x, y);
+        } else {
+          graphCtx.lineTo(x, y);
+        }
+
+        // 遅延が大きいポイントを赤でマーク
+        if (intervals[i] > 200) {
+          graphCtx.fillStyle = '#ff6b6b';
+          graphCtx.beginPath();
+          graphCtx.arc(x, y, 3, 0, Math.PI * 2);
+          graphCtx.fill();
+          graphCtx.beginPath();
+          graphCtx.strokeStyle = '#4ecdc4';
+          graphCtx.moveTo(x, y);
+        }
+      }
+      graphCtx.stroke();
+    }
+
+    // キー入力
+    document.addEventListener('keydown', (e) => {
+      let dir = null;
+      switch (e.key) {
+        case 'ArrowUp':    dir = 'up';    break;
+        case 'ArrowDown':  dir = 'down';  break;
+        case 'ArrowLeft':  dir = 'left';  break;
+        case 'ArrowRight': dir = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', direction: dir }));
+    });
+
+    // 描画
+    function draw() {
+      ctx.fillStyle = '#0f3460';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      for (let x = 0; x < canvas.width; x += GRID) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += GRID) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      if (!state.snakes) return;
+
+      for (const [id, snake] of Object.entries(state.snakes)) {
+        if (!snake.body) continue;
+        const isMe = id === myId;
+
+        for (let i = 0; i < snake.body.length; i++) {
+          const seg = snake.body[i];
+          ctx.fillStyle = i === 0 ? snake.color : `rgba(100, 100, 100, 0.6)`;
+          ctx.fillRect(seg.x + 1, seg.y + 1, GRID - 2, GRID - 2);
+        }
+
+        if (isMe && snake.body.length > 0) {
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(snake.body[0].x, snake.body[0].y, GRID, GRID);
+        }
+      }
+    }
+
+    draw();
+  </script>
+</body>
+</html>
