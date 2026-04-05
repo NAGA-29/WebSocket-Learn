@@ -48,25 +48,25 @@ type LightSnake struct {
 
 // FullState は全量送信のゲーム状態
 type FullState struct {
-	Type   string               `json:"type"`
+	Type   string                `json:"type"`
 	Snakes map[string]*FullSnake `json:"snakes"`
-	MyID   string               `json:"myId,omitempty"`
+	MyID   string                `json:"myId,omitempty"`
 }
 
 // LightState は最適化版のゲーム状態
 type LightState struct {
-	T      string               `json:"t"`      // type
-	S      map[string]*LightSnake `json:"s"`    // snakes
-	MyID   string               `json:"myId,omitempty"`
+	T    string                `json:"t"`              // type
+	S    map[string]*LightSnake `json:"s"`             // snakes
+	MyID string                `json:"myId,omitempty"`
 }
 
 // 統計情報をクライアントに送る（デバッグ用）
 type StatsMessage struct {
-	Type        string  `json:"type"`
-	FullSize    int     `json:"fullSize"`    // 全量のバイト数
-	LightSize   int     `json:"lightSize"`   // 軽量版のバイト数
-	PlayerCount int     `json:"playerCount"` // 現在のプレイヤー数
-	TickCount   int64   `json:"tickCount"`
+	Type        string `json:"type"`
+	FullSize    int    `json:"fullSize"`    // 全量のバイト数
+	LightSize   int    `json:"lightSize"`   // 軽量版のバイト数
+	PlayerCount int    `json:"playerCount"` // 現在のプレイヤー数
+	TickCount   int64  `json:"tickCount"`
 }
 
 var (
@@ -131,10 +131,18 @@ func moveSnake(s *FullSnake) {
 	case "right":
 		nh = Point{h.X + gridSize, h.Y}
 	}
-	if nh.X < 0 { nh.X = fieldWidth - gridSize }
-	if nh.X >= fieldWidth { nh.X = 0 }
-	if nh.Y < 0 { nh.Y = fieldHeight - gridSize }
-	if nh.Y >= fieldHeight { nh.Y = 0 }
+	if nh.X < 0 {
+		nh.X = fieldWidth - gridSize
+	}
+	if nh.X >= fieldWidth {
+		nh.X = 0
+	}
+	if nh.Y < 0 {
+		nh.Y = fieldHeight - gridSize
+	}
+	if nh.Y >= fieldHeight {
+		nh.Y = 0
+	}
 	s.Body = append([]Point{nh}, s.Body...)
 	if len(s.Body) > 10 {
 		s.Body = s.Body[:10]
@@ -166,7 +174,11 @@ func broadcastWithStats() {
 
 	// --- 全量送信版 ---
 	fullMsg := FullState{Type: "state", Snakes: sc}
-	fullData, _ := json.Marshal(fullMsg)
+	fullData, err := json.Marshal(fullMsg)
+	if err != nil {
+		log.Printf("broadcastWithStats: fullMsg marshal エラー: %v", err)
+		return
+	}
 
 	// --- 軽量版（フィールド名短縮）---
 	lightSnakes := make(map[string]*LightSnake, len(sc))
@@ -179,7 +191,11 @@ func broadcastWithStats() {
 		}
 	}
 	lightMsg := LightState{T: "state", S: lightSnakes}
-	lightData, _ := json.Marshal(lightMsg)
+	lightData, err := json.Marshal(lightMsg)
+	if err != nil {
+		log.Printf("broadcastWithStats: lightMsg marshal エラー: %v", err)
+		return
+	}
 
 	// --- 統計情報 ---
 	stats := StatsMessage{
@@ -189,20 +205,48 @@ func broadcastWithStats() {
 		PlayerCount: count,
 		TickCount:   tick,
 	}
-	statsData, _ := json.Marshal(stats)
+	statsData, err := json.Marshal(stats)
+	if err != nil {
+		log.Printf("broadcastWithStats: stats marshal エラー: %v", err)
+		return
+	}
 
 	// サーバーでもログに出す（一定間隔で）
 	if tick%50 == 0 {
+		// fullData が空の場合のゼロ除算を防ぐ
+		var ratio float64
+		if len(fullData) > 0 {
+			ratio = float64(len(lightData)) / float64(len(fullData)) * 100
+		}
 		log.Printf("tick %d: full=%d bytes, light=%d bytes, ratio=%.1f%%, players=%d",
-			tick, len(fullData), len(lightData),
-			float64(len(lightData))/float64(len(fullData))*100,
-			count)
+			tick, len(fullData), len(lightData), ratio, count)
 	}
 
-	// 全クライアントに送信（全量版 + 統計）
-	for _, conn := range cc {
-		conn.WriteMessage(websocket.TextMessage, fullData)
-		conn.WriteMessage(websocket.TextMessage, statsData)
+	// 送信エラーが起きた接続を後でまとめて削除するためのリスト
+	var failed []string
+	for id, conn := range cc {
+		if err := conn.WriteMessage(websocket.TextMessage, fullData); err != nil {
+			log.Printf("broadcastWithStats: 送信エラー（切断扱い）: %s: %v", id, err)
+			failed = append(failed, id)
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, statsData); err != nil {
+			log.Printf("broadcastWithStats: stats 送信エラー: %s: %v", id, err)
+			failed = append(failed, id)
+		}
+	}
+
+	// 送信失敗した接続を削除する
+	if len(failed) > 0 {
+		mu.Lock()
+		for _, id := range failed {
+			if conn, ok := clients[id]; ok {
+				conn.Close()
+			}
+			delete(clients, id)
+			delete(snakes, id)
+		}
+		mu.Unlock()
 	}
 }
 
@@ -224,14 +268,21 @@ func handleWebSocket(c echo.Context) error {
 	color := playerColors[(counter-1)%len(playerColors)]
 	body := []Point{}
 	for i := 0; i < 10; i++ {
-		body = append(body, Point{float64((10-i)*gridSize), float64((counter-1)%10*3*gridSize + gridSize)})
+		body = append(body, Point{
+			float64((10-i) * gridSize),
+			float64((counter-1)%10*3*gridSize + gridSize),
+		})
 	}
 	snakes[id] = &FullSnake{ID: id, Body: body, Direction: "right", Color: color}
 	clients[id] = conn
 	mu.Unlock()
 
-	ack, _ := json.Marshal(FullState{Type: "state", MyID: id, Snakes: map[string]*FullSnake{}})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	ack, err := json.Marshal(FullState{Type: "state", MyID: id, Snakes: map[string]*FullSnake{}})
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	defer func() {
 		mu.Lock()

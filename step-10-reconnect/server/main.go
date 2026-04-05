@@ -51,9 +51,33 @@ type ClientMessage struct {
 	Direction string `json:"direction"`
 }
 
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket の仕様:
+//   「同一コネクションへの WriteMessage 系呼び出しは同時に1つしか許可されない」
+//
+// broadcastState（gameLoop goroutine）と ping 送信 goroutine が
+// 同じ conn に並行して書き込む可能性があるため、
+// WriteMessage はすべて writeMu で直列化する。
+// ping には WriteControl を使う（gorilla ドキュメントに
+// "Close and WriteControl can be called concurrently with all other methods"
+// と明記されているため writeMu 不要）。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex // WriteMessage 呼び出しを直列化するロック
+}
+
+// writeText は writeMu を取得してから TextMessage を送る。
+// エラーを返すので呼び出し側でハンドリングする。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
+}
+
 var (
 	snakes  = make(map[string]*Snake)
-	clients = make(map[string]*websocket.Conn)
+	clients = make(map[string]*Client)
 	mu      sync.RWMutex
 	counter int
 )
@@ -111,10 +135,18 @@ func moveSnake(s *Snake) {
 	case "right":
 		nh = Point{head.X + gridSize, head.Y}
 	}
-	if nh.X < 0 { nh.X = fieldWidth - gridSize }
-	if nh.X >= fieldWidth { nh.X = 0 }
-	if nh.Y < 0 { nh.Y = fieldHeight - gridSize }
-	if nh.Y >= fieldHeight { nh.Y = 0 }
+	if nh.X < 0 {
+		nh.X = fieldWidth - gridSize
+	}
+	if nh.X >= fieldWidth {
+		nh.X = 0
+	}
+	if nh.Y < 0 {
+		nh.Y = fieldHeight - gridSize
+	}
+	if nh.Y >= fieldHeight {
+		nh.Y = 0
+	}
 	s.Body = append([]Point{nh}, s.Body...)
 	if len(s.Body) > 5 {
 		s.Body = s.Body[:5]
@@ -131,9 +163,9 @@ func broadcastState() {
 		cp.Body = bc
 		sc[id] = &cp
 	}
-	cc := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		cc[id] = conn
+	cc := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		cc[id] = c
 	}
 	mu.RUnlock()
 
@@ -141,9 +173,32 @@ func broadcastState() {
 		return
 	}
 
-	data, _ := json.Marshal(GameState{Type: "state", Snakes: sc})
-	for _, conn := range cc {
-		conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(GameState{Type: "state", Snakes: sc})
+	if err != nil {
+		log.Printf("broadcastState: json.Marshal エラー: %v", err)
+		return
+	}
+
+	// 送信エラーが起きた接続を後でまとめて削除するためのリスト
+	var failed []string
+	for id, client := range cc {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcastState: 送信エラー（切断扱い）: %s: %v", id, err)
+			failed = append(failed, id)
+		}
+	}
+
+	// 送信失敗した接続を削除する
+	if len(failed) > 0 {
+		mu.Lock()
+		for _, id := range failed {
+			if c, ok := clients[id]; ok {
+				c.conn.Close()
+			}
+			delete(clients, id)
+			delete(snakes, id)
+		}
+		mu.Unlock()
 	}
 }
 
@@ -156,11 +211,11 @@ func handleWebSocket(c echo.Context) error {
 
 	// --- Heartbeat の設定 ---
 
-	// 最初のread deadlineを設定
-	// この時間内に pong（またはメッセージ）が来なければ ReadMessage がエラーを返す
+	// 最初の read deadline を設定。
+	// この時間内に pong（またはメッセージ）が来なければ ReadMessage がエラーを返す。
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 
-	// pong を受け取ったら deadline を更新する
+	// pong を受け取ったら deadline を延長する
 	conn.SetPongHandler(func(appData string) error {
 		log.Printf("pong 受信")
 		conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -174,18 +229,29 @@ func handleWebSocket(c echo.Context) error {
 	color := playerColors[(counter-1)%len(playerColors)]
 	body := []Point{}
 	for i := 0; i < 5; i++ {
-		body = append(body, Point{float64((10 - i) * gridSize), float64((counter-1)%10*3*gridSize + gridSize)})
+		body = append(body, Point{
+			float64((10 - i) * gridSize),
+			float64((counter-1)%10*3*gridSize + gridSize),
+		})
 	}
+	client := &Client{conn: conn}
 	snakes[id] = &Snake{ID: id, Body: body, Direction: "right", Color: color}
-	clients[id] = conn
+	clients[id] = client
 	mu.Unlock()
 
 	log.Printf("プレイヤー接続: %s", id)
 
-	ack, _ := json.Marshal(GameState{Type: "state", MyID: id, Snakes: map[string]*Snake{}})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	// 初回 ack を送信（writeMu で直列化）
+	ack, err := json.Marshal(GameState{Type: "state", MyID: id, Snakes: map[string]*Snake{}})
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	// --- ping を定期送信する goroutine ---
+	// WriteControl は WriteMessage と同時に呼んでも安全（gorilla の仕様より）。
+	// writeMu を取得する必要はなく、WriteControl のみを使う。
 	pingStop := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(pingInterval)
@@ -193,8 +259,9 @@ func handleWebSocket(c echo.Context) error {
 		for {
 			select {
 			case <-ticker.C:
-				// PingMessage を送信
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				// WriteControl は deadline を引数に取る
+				deadline := time.Now().Add(5 * time.Second)
+				if err := conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
 					log.Printf("ping 送信エラー: %v", err)
 					return
 				}
