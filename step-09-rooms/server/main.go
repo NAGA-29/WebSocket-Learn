@@ -161,9 +161,9 @@ func (r *Room) moveSnake(snake *Snake) {
 			break
 		}
 	}
-	if !ate && len(snake.Body) > initialSnakeLen {
-		snake.Body = snake.Body[:len(snake.Body)-1]
-	} else if !ate {
+	// エサを食べていなければ尻尾を削除して長さを維持する
+	// 食べたときは削除しないことで長さが1増える（成長）
+	if !ate {
 		snake.Body = snake.Body[:len(snake.Body)-1]
 	}
 }

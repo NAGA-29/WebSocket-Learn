@@ -193,7 +193,8 @@
       graphCtx.strokeStyle = '#4ecdc4';
       graphCtx.lineWidth = 1.5;
 
-      const startIdx = Math.max(0, intervals.length - MAX_HISTORY);
+      // intervals は onmessage で MAX_HISTORY 件以内に切り詰め済みなので
+      // i=0 から全件描画すればよい
       for (let i = 0; i < intervals.length; i++) {
         const x = i * step;
         const y = h - (intervals[i] / maxVal * h);

@@ -47,9 +47,14 @@
   <!-- 統計パネル -->
   <div id="stats">
     <div class="stat-card">
-      <div class="label">全量サイズ（受信）</div>
+      <div class="label">全量サイズ（サーバー計測）</div>
       <div class="value" id="fullSizeEl">-</div>
       <div class="unit">bytes / tick</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">実際の受信サイズ</div>
+      <div class="value" id="actualSizeEl">-</div>
+      <div class="unit">bytes / メッセージ</div>
     </div>
     <div class="stat-card">
       <div class="label">軽量版サイズ（推定）</div>
@@ -109,6 +114,7 @@
     const playerCountEl = document.getElementById('playerCountEl');
     const bandwidthEl   = document.getElementById('bandwidthEl');
     const tickEl        = document.getElementById('tickEl');
+    const actualSizeEl  = document.getElementById('actualSizeEl');
     const btnConn       = document.getElementById('btnConnect');
     const btnDisc       = document.getElementById('btnDisconnect');
 
@@ -121,8 +127,9 @@
       };
 
       ws.onmessage = (event) => {
-        // 受信サイズを計測（Blob API で正確に計測）
-        const receivedSize = new Blob([event.data]).size;
+        // WebSocket フレームの実際の受信バイト数（JSON文字列のバイト数）
+        // Blob API を使うと UTF-8 バイト数が正確に得られる
+        const actualSize = new Blob([event.data]).size;
 
         const msg = JSON.parse(event.data);
 
@@ -131,6 +138,8 @@
         }
 
         if (msg.type === 'state' && msg.snakes) {
+          // state メッセージの受信サイズを表示（フレームごとの実測値）
+          actualSizeEl.textContent = actualSize;
           state = msg;
           draw();
         }
@@ -139,7 +148,10 @@
           // サーバーから送られる統計情報を表示
           fullSizeEl.textContent    = msg.fullSize;
           lightSizeEl.textContent   = msg.lightSize;
-          const ratio = ((1 - msg.lightSize / msg.fullSize) * 100).toFixed(1);
+          // msg.fullSize が 0 の場合は比率計算を行わない（ゼロ除算防止）
+          const ratio = msg.fullSize > 0
+            ? ((1 - msg.lightSize / msg.fullSize) * 100).toFixed(1)
+            : '-';
           ratioEl.textContent       = ratio;
           playerCountEl.textContent = msg.playerCount;
           tickEl.textContent        = msg.tickCount;
