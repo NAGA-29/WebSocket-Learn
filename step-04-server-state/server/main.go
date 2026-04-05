@@ -12,8 +12,27 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: 全オリジンを許可。本番では許可オリジンを限定すること。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
+// 同時に1つだけ」という制約がある。
+// broadcast() は複数の接続ハンドラ goroutine から同時に呼ばれ得るため、
+// すべての WriteMessage を writeMu で直列化する。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+// writeText は writeMu を取得してからメッセージを送る。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // Player はプレイヤーの状態を表す構造体
@@ -34,16 +53,16 @@ type ClientMessage struct {
 
 // ServerMessage はクライアントへ送るメッセージ
 type ServerMessage struct {
-	Type    string              `json:"type"`
-	Players map[string]*Player  `json:"players"`
-	MyID    string              `json:"myId,omitempty"` // 自分のIDをack時に通知
+	Type    string             `json:"type"`
+	Players map[string]*Player `json:"players"`
+	MyID    string             `json:"myId,omitempty"` // 自分のIDをack時に通知
 }
 
 // ゲームのグローバル状態
 // サーバーが「真実」として保持する
 var (
 	players = make(map[string]*Player)
-	clients = make(map[string]*websocket.Conn)
+	clients = make(map[string]*Client)
 	mu      sync.RWMutex
 	counter int
 )
@@ -82,9 +101,9 @@ func broadcast() {
 		copy := *p
 		playersCopy[id] = &copy
 	}
-	clientsCopy := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		clientsCopy[id] = conn
+	clientsCopy := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		clientsCopy[id] = c
 	}
 	mu.RUnlock()
 
@@ -92,10 +111,17 @@ func broadcast() {
 		Type:    "state",
 		Players: playersCopy,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("broadcast: json.Marshal エラー: %v", err)
+		return
+	}
 
-	for _, conn := range clientsCopy {
-		conn.WriteMessage(websocket.TextMessage, data)
+	// 各 Client の writeMu が並行 write を直列化する
+	for _, client := range clientsCopy {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcast: 送信エラー: %v", err)
+		}
 	}
 }
 
@@ -135,6 +161,9 @@ func handleWebSocket(c echo.Context) error {
 	}
 	defer conn.Close()
 
+	// Client を作成
+	client := &Client{conn: conn}
+
 	// プレイヤーIDと色を割り当てる
 	mu.Lock()
 	counter++
@@ -150,18 +179,22 @@ func handleWebSocket(c echo.Context) error {
 		Color:     playerColors[colorIdx],
 	}
 	players[playerID] = player
-	clients[playerID] = conn
+	clients[playerID] = client
 	mu.Unlock()
 
 	log.Printf("プレイヤー接続: %s", playerID)
 
 	// 自分のIDを通知する
-	ack, _ := json.Marshal(ServerMessage{
-		Type: "state",
-		MyID: playerID,
+	ack, err := json.Marshal(ServerMessage{
+		Type:    "state",
+		MyID:    playerID,
 		Players: map[string]*Player{},
 	})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	// 現在の状態を全員にブロードキャスト
 	broadcast()

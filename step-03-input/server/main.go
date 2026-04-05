@@ -12,8 +12,27 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: 全オリジンを許可。本番では許可オリジンを限定すること。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
+// 同時に1つだけ」という制約がある。
+// broadcast() は複数の接続ハンドラ goroutine から同時に呼ばれ得るため、
+// すべての WriteMessage を writeMu で直列化する。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+// writeText は writeMu を取得してからメッセージを送る。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // ClientMessage はクライアントから受け取るメッセージの形式
@@ -34,18 +53,13 @@ type ServerMessage struct {
 // 値: 最新の方向 ("up" / "down" / "left" / "right")
 var playerInputs = make(map[string]string)
 
-// clients は接続中のクライアント（プレイヤーID → WebSocket接続）
-var clients = make(map[string]*websocket.Conn)
+// clients は接続中のクライアント（プレイヤーID → Client）
+var clients = make(map[string]*Client)
 
 var mu sync.Mutex
 
-// idCounter はシンプルな連番プレイヤーID生成用
+// idCounter はシンプルな連番プレイヤーID生成用（mu で保護する）
 var idCounter int
-
-func generatePlayerID() string {
-	idCounter++
-	return fmt.Sprintf("player-%d", idCounter)
-}
 
 func main() {
 	e := echo.New()
@@ -61,14 +75,14 @@ func main() {
 // broadcast は全クライアントに現在の全入力状態を送る
 func broadcast() {
 	mu.Lock()
-	// 現在の inputs をコピー（ロック中の処理を最小限にするため）
+	// 現在の inputs と clients をコピー（ロック中の処理を最小限にするため）
 	inputsCopy := make(map[string]string, len(playerInputs))
 	for id, dir := range playerInputs {
 		inputsCopy[id] = dir
 	}
-	clientsCopy := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		clientsCopy[id] = conn
+	clientsCopy := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		clientsCopy[id] = c
 	}
 	mu.Unlock()
 
@@ -76,10 +90,17 @@ func broadcast() {
 		Type:   "state",
 		Inputs: inputsCopy,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("broadcast: json.Marshal エラー: %v", err)
+		return
+	}
 
-	for _, conn := range clientsCopy {
-		conn.WriteMessage(websocket.TextMessage, data)
+	// 各 Client の writeMu が並行 write を直列化する
+	for _, client := range clientsCopy {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcast: 送信エラー: %v", err)
+		}
 	}
 }
 
@@ -90,22 +111,29 @@ func handleWebSocket(c echo.Context) error {
 	}
 	defer conn.Close()
 
-	// 新しいプレイヤーにIDを割り当てる
-	playerID := generatePlayerID()
+	// Client を作成
+	client := &Client{conn: conn}
 
+	// プレイヤーIDの割り当てと登録を同じロック内で行い、競合を防ぐ
 	mu.Lock()
-	clients[playerID] = conn
+	idCounter++
+	playerID := fmt.Sprintf("player-%d", idCounter)
+	clients[playerID] = client
 	playerInputs[playerID] = "right" // 初期方向
 	mu.Unlock()
 
 	log.Printf("プレイヤー接続: %s", playerID)
 
 	// 自分のIDをクライアントに通知
-	ack, _ := json.Marshal(ServerMessage{
+	ack, err := json.Marshal(ServerMessage{
 		Type:     "ack",
 		PlayerID: playerID,
 	})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	// 切断時の後処理
 	defer func() {

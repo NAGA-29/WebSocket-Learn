@@ -26,7 +26,11 @@
 |---|---|
 | フロント | HTML / CSS / 素のJavaScript / Canvas API |
 | バックエンド | Go + echo + gorilla/websocket |
-| 使わないもの | React, TypeScript, Redux, Redis, DB |
+| 実装では使わないもの | React, TypeScript, Redux, DB |
+| 概念として触れるもの | Redis（Step 12 で Pub/Sub の役割のみ解説、実装なし） |
+
+> **注:** Redis は Step 12 で「複数サーバー構成ではどう使うか」を概念レベルで説明します。
+> Step 0〜11 の実装コードには登場しません。
 
 理由は単純で、**理解前に道具を増やすと本質が見えなくなるから**です。
 

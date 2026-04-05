@@ -13,8 +13,18 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: CheckOrigin で全オリジンを許可している。
+// これは Cross-Site WebSocket Hijacking（CSWSH）に対して無防備になるため
+// 本番環境では絶対に使用しないこと。
+//
+// 本番向けの最低限の対策例:
+//   CheckOrigin: func(r *http.Request) bool {
+//       origin := r.Header.Get("Origin")
+//       return origin == "https://yourdomain.example.com"
+//   }
+// さらに認証が必要な場合は JWT や Cookie セッションをアップグレード前に検証する。
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool { return true }, // 開発専用: 全オリジン許可
 }
 
 // heartbeat の設定
