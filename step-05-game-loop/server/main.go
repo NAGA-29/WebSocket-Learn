@@ -13,8 +13,27 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: 全オリジンを許可。本番では許可オリジンを限定すること。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
+// 同時に1つだけ」という制約がある。
+// gameLoop の broadcastState と handleWebSocket の ack 送信が
+// 同一 conn に並行して書き込む可能性があるため、writeMu で直列化する。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+// writeText は writeMu を取得してからメッセージを送る。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // Player はプレイヤーの状態
@@ -42,7 +61,7 @@ type ServerMessage struct {
 
 var (
 	players   = make(map[string]*Player)
-	clients   = make(map[string]*websocket.Conn)
+	clients   = make(map[string]*Client)
 	mu        sync.RWMutex
 	counter   int
 	tickCount int64
@@ -83,7 +102,7 @@ func gameLoop() {
 	for {
 		<-ticker.C // ticker がカウントするたびにここを通過する
 
-		updateGame()    // ゲームの状態を更新
+		updateGame()     // ゲームの状態を更新
 		broadcastState() // 全クライアントに配信
 	}
 }
@@ -134,12 +153,12 @@ func broadcastState() {
 	mu.RLock()
 	playersCopy := make(map[string]*Player, len(players))
 	for id, p := range players {
-		copy := *p
-		playersCopy[id] = &copy
+		cp := *p
+		playersCopy[id] = &cp
 	}
-	clientsCopy := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		clientsCopy[id] = conn
+	clientsCopy := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		clientsCopy[id] = c
 	}
 	tick := tickCount
 	mu.RUnlock()
@@ -153,10 +172,16 @@ func broadcastState() {
 		Players:   playersCopy,
 		TickCount: tick,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("broadcastState: json.Marshal エラー: %v", err)
+		return
+	}
 
-	for _, conn := range clientsCopy {
-		conn.WriteMessage(websocket.TextMessage, data)
+	for _, client := range clientsCopy {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcastState: 送信エラー: %v", err)
+		}
 	}
 }
 
@@ -167,6 +192,9 @@ func handleWebSocket(c echo.Context) error {
 	}
 	defer conn.Close()
 
+	// Client を作成
+	client := &Client{conn: conn}
+
 	// プレイヤー登録
 	mu.Lock()
 	counter++
@@ -174,24 +202,28 @@ func handleWebSocket(c echo.Context) error {
 	colorIdx := (counter - 1) % len(playerColors)
 	player := &Player{
 		ID:        playerID,
-		X:         float64(100 + ((counter - 1) % 8) * 80),
+		X:         float64(100 + ((counter-1)%8)*80),
 		Y:         300,
 		Direction: "right",
 		Color:     playerColors[colorIdx],
 	}
 	players[playerID] = player
-	clients[playerID] = conn
+	clients[playerID] = client
 	mu.Unlock()
 
 	log.Printf("プレイヤー接続: %s", playerID)
 
 	// 自分のIDを通知
-	ack, _ := json.Marshal(ServerMessage{
+	ack, err := json.Marshal(ServerMessage{
 		Type:    "state",
 		MyID:    playerID,
 		Players: map[string]*Player{},
 	})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	// 切断処理
 	defer func() {

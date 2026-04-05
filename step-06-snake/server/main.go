@@ -14,18 +14,37 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: 全オリジンを許可。本番では許可オリジンを限定すること。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
+// 同時に1つだけ」という制約がある。
+// gameLoop の broadcastState と handleWebSocket の ack 送信が
+// 同一 conn に並行して書き込む可能性があるため、writeMu で直列化する。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+// writeText は writeMu を取得してからメッセージを送る。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // フィールドとグリッドの設定
 const (
 	fieldWidth  = 800
 	fieldHeight = 600
-	gridSize    = 20  // 1マスのサイズ（px）
-	tickRate    = 150 * time.Millisecond // 1秒あたり約7tick（蛇ゲームらしい速度）
-	initialLen  = 5   // 蛇の初期の長さ（マス数）
-	foodCount   = 5   // フィールド上のエサ数
+	gridSize    = 20                      // 1マスのサイズ（px）
+	tickRate    = 150 * time.Millisecond  // 1秒あたり約7tick（蛇ゲームらしい速度）
+	initialLen  = 5                       // 蛇の初期の長さ（マス数）
+	foodCount   = 5                       // フィールド上のエサ数
 )
 
 // Point はグリッド上の1点
@@ -57,15 +76,15 @@ type ClientMessage struct {
 
 // GameState はゲーム全体の状態（これをクライアントに送る）
 type GameState struct {
-	Type   string             `json:"type"`
-	Snakes map[string]*Snake  `json:"snakes"`
-	Foods  []Food             `json:"foods"`
-	MyID   string             `json:"myId,omitempty"`
+	Type   string            `json:"type"`
+	Snakes map[string]*Snake `json:"snakes"`
+	Foods  []Food            `json:"foods"`
+	MyID   string            `json:"myId,omitempty"`
 }
 
 var (
 	snakes  = make(map[string]*Snake)
-	clients = make(map[string]*websocket.Conn)
+	clients = make(map[string]*Client)
 	foods   []Food
 	mu      sync.RWMutex
 	counter int
@@ -224,9 +243,9 @@ func broadcastState() {
 	}
 	foodsCopy := make([]Food, len(foods))
 	copy(foodsCopy, foods)
-	clientsCopy := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		clientsCopy[id] = conn
+	clientsCopy := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		clientsCopy[id] = c
 	}
 	mu.RUnlock()
 
@@ -239,10 +258,16 @@ func broadcastState() {
 		Snakes: snakesCopy,
 		Foods:  foodsCopy,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("broadcastState: json.Marshal エラー: %v", err)
+		return
+	}
 
-	for _, conn := range clientsCopy {
-		conn.WriteMessage(websocket.TextMessage, data)
+	for _, client := range clientsCopy {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcastState: 送信エラー: %v", err)
+		}
 	}
 }
 
@@ -252,6 +277,9 @@ func handleWebSocket(c echo.Context) error {
 		return err
 	}
 	defer conn.Close()
+
+	// Client を作成
+	client := &Client{conn: conn}
 
 	mu.Lock()
 	counter++
@@ -266,19 +294,23 @@ func handleWebSocket(c echo.Context) error {
 
 	snake := createSnake(snakeID, playerColors[colorIdx], startX, startY)
 	snakes[snakeID] = snake
-	clients[snakeID] = conn
+	clients[snakeID] = client
 	mu.Unlock()
 
 	log.Printf("蛇が接続: %s", snakeID)
 
 	// 自分のIDを通知
-	ack, _ := json.Marshal(GameState{
+	ack, err := json.Marshal(GameState{
 		Type:   "state",
 		MyID:   snakeID,
 		Snakes: map[string]*Snake{},
 		Foods:  []Food{},
 	})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	defer func() {
 		mu.Lock()

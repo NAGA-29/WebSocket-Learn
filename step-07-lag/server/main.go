@@ -14,8 +14,27 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: 全オリジンを許可。本番では許可オリジンを限定すること。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
+// 同時に1つだけ」という制約がある。
+// gameLoop の broadcastState と handleWebSocket の ack 送信が
+// 同一 conn に並行して書き込む可能性があるため、writeMu で直列化する。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+// writeText は writeMu を取得してからメッセージを送る。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // 遅延実験用の設定
@@ -50,12 +69,12 @@ type Snake struct {
 
 // GameState にデバッグ情報を追加
 type GameState struct {
-	Type          string            `json:"type"`
-	Snakes        map[string]*Snake `json:"snakes"`
-	TickCount     int64             `json:"tickCount"`
-	ServerTime    int64             `json:"serverTime"`    // サーバー送信時刻
-	DelayApplied  int               `json:"delayApplied"`  // 実際に適用した遅延ms
-	MyID          string            `json:"myId,omitempty"`
+	Type         string            `json:"type"`
+	Snakes       map[string]*Snake `json:"snakes"`
+	TickCount    int64             `json:"tickCount"`
+	ServerTime   int64             `json:"serverTime"`   // サーバー送信時刻
+	DelayApplied int               `json:"delayApplied"` // 実際に適用した遅延ms
+	MyID         string            `json:"myId,omitempty"`
 }
 
 type ClientMessage struct {
@@ -65,7 +84,7 @@ type ClientMessage struct {
 
 var (
 	snakes    = make(map[string]*Snake)
-	clients   = make(map[string]*websocket.Conn)
+	clients   = make(map[string]*Client)
 	mu        sync.RWMutex
 	counter   int
 	tickCount int64
@@ -160,9 +179,9 @@ func broadcastState(delay int) {
 		sCopy.Body = bodyCopy
 		snakesCopy[id] = &sCopy
 	}
-	clientsCopy := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		clientsCopy[id] = conn
+	clientsCopy := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		clientsCopy[id] = c
 	}
 	tick := tickCount
 	mu.RUnlock()
@@ -178,10 +197,16 @@ func broadcastState(delay int) {
 		ServerTime:   time.Now().UnixMilli(), // 送信時刻をミリ秒で送る
 		DelayApplied: delay,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("broadcastState: json.Marshal エラー: %v", err)
+		return
+	}
 
-	for _, conn := range clientsCopy {
-		conn.WriteMessage(websocket.TextMessage, data)
+	for _, client := range clientsCopy {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcastState: 送信エラー: %v", err)
+		}
 	}
 }
 
@@ -191,6 +216,9 @@ func handleWebSocket(c echo.Context) error {
 		return err
 	}
 	defer conn.Close()
+
+	// Client を作成
+	client := &Client{conn: conn}
 
 	mu.Lock()
 	counter++
@@ -210,15 +238,19 @@ func handleWebSocket(c echo.Context) error {
 		Direction: "right",
 		Color:     playerColors[colorIdx],
 	}
-	clients[snakeID] = conn
+	clients[snakeID] = client
 	mu.Unlock()
 
-	ack, _ := json.Marshal(GameState{
+	ack, err := json.Marshal(GameState{
 		Type:   "state",
 		MyID:   snakeID,
 		Snakes: map[string]*Snake{},
 	})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	defer func() {
 		mu.Lock()

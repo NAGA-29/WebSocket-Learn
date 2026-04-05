@@ -17,18 +17,37 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// ⚠️  開発用設定: 全オリジンを許可。本番では許可オリジンを限定すること。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Client は接続と書き込みロックをまとめた構造体。
+//
+// gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
+// 同時に1つだけ」という制約がある。
+// gameLoop の broadcastState と handleWebSocket の ack 送信が
+// 同一 conn に並行して書き込む可能性があるため、writeMu で直列化する。
+type Client struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+// writeText は writeMu を取得してからメッセージを送る。
+func (c *Client) writeText(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // 補間実験用の設定
 // 意図的に遅い tickRate でも補間で滑らかに見えることを確認する
 const (
-	tickRate        = 100 * time.Millisecond // 変えて実験してみてください
-	maxRandomDelayMs = 0                     // ランダム遅延（0=なし）
-	fieldWidth      = 800
-	fieldHeight     = 600
-	gridSize        = 20
+	tickRate         = 100 * time.Millisecond // 変えて実験してみてください
+	maxRandomDelayMs = 0                      // ランダム遅延（0=なし）
+	fieldWidth       = 800
+	fieldHeight      = 600
+	gridSize         = 20
 )
 
 type Point struct {
@@ -58,7 +77,7 @@ type ClientMessage struct {
 
 var (
 	snakes  = make(map[string]*Snake)
-	clients = make(map[string]*websocket.Conn)
+	clients = make(map[string]*Client)
 	mu      sync.RWMutex
 	counter int
 	tick    int64
@@ -146,9 +165,9 @@ func broadcastState() {
 		sc.Body = bc
 		snakesCopy[id] = &sc
 	}
-	clientsCopy := make(map[string]*websocket.Conn, len(clients))
-	for id, conn := range clients {
-		clientsCopy[id] = conn
+	clientsCopy := make(map[string]*Client, len(clients))
+	for id, c := range clients {
+		clientsCopy[id] = c
 	}
 	t := tick
 	mu.RUnlock()
@@ -163,9 +182,15 @@ func broadcastState() {
 		TickCount:  t,
 		ServerTime: time.Now().UnixMilli(),
 	}
-	data, _ := json.Marshal(msg)
-	for _, conn := range clientsCopy {
-		conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("broadcastState: json.Marshal エラー: %v", err)
+		return
+	}
+	for _, client := range clientsCopy {
+		if err := client.writeText(data); err != nil {
+			log.Printf("broadcastState: 送信エラー: %v", err)
+		}
 	}
 }
 
@@ -175,6 +200,9 @@ func handleWebSocket(c echo.Context) error {
 		return err
 	}
 	defer conn.Close()
+
+	// Client を作成
+	client := &Client{conn: conn}
 
 	mu.Lock()
 	counter++
@@ -188,11 +216,15 @@ func handleWebSocket(c echo.Context) error {
 		})
 	}
 	snakes[id] = &Snake{ID: id, Body: body, Direction: "right", Color: color}
-	clients[id] = conn
+	clients[id] = client
 	mu.Unlock()
 
-	ack, _ := json.Marshal(GameState{Type: "state", MyID: id, Snakes: map[string]*Snake{}})
-	conn.WriteMessage(websocket.TextMessage, ack)
+	ack, err := json.Marshal(GameState{Type: "state", MyID: id, Snakes: map[string]*Snake{}})
+	if err != nil {
+		log.Printf("ack: json.Marshal エラー: %v", err)
+	} else if err := client.writeText(ack); err != nil {
+		log.Printf("ack 送信エラー: %v", err)
+	}
 
 	defer func() {
 		mu.Lock()
