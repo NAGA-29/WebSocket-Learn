@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 5: ゲームループ</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; }
+    #info { display: flex; gap: 20px; margin-bottom: 12px; font-size: 14px; color: #aaa; }
+    #status { padding: 6px 12px; border-radius: 4px; font-weight: bold; }
+    .connected    { background: #155724; }
+    .disconnected { background: #721c24; }
+    canvas { border: 2px solid #444; background: #0f3460; display: block; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .hint { color: #888; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Step 5: ゲームループ</h1>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <div id="info">
+    <span id="status" class="disconnected">切断中</span>
+    <span>自分のID: <span id="myId">なし</span></span>
+    <span>Tick: <span id="tickCount">0</span></span>
+    <span>最終受信: <span id="lastReceived">-</span></span>
+  </div>
+
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <p class="hint">接続するとキーを押さなくても右方向に自走します。矢印キーで方向を変えてください。</p>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    let ws    = null;
+    let myId  = null;
+    let state = { players: {}, tickCount: 0 };
+    let lastReceivedTime = null;
+
+    const statusEl    = document.getElementById('status');
+    const myIdEl      = document.getElementById('myId');
+    const tickEl      = document.getElementById('tickCount');
+    const lastRecvEl  = document.getElementById('lastReceived');
+    const btnConn     = document.getElementById('btnConnect');
+    const btnDisc     = document.getElementById('btnDisconnect');
+
+    function setUI(connected) {
+      statusEl.textContent = connected ? '接続中' : '切断中';
+      statusEl.className   = connected ? 'connected' : 'disconnected';
+      btnConn.disabled     = connected;
+      btnDisc.disabled     = !connected;
+    }
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => setUI(true);
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.myId) {
+          myId = msg.myId;
+          myIdEl.textContent = myId;
+        }
+
+        if (msg.type === 'state' && msg.players) {
+          state = msg;
+
+          // デバッグ情報を更新
+          tickEl.textContent = msg.tickCount;
+          const now = Date.now();
+          if (lastReceivedTime) {
+            const interval = now - lastReceivedTime;
+            lastRecvEl.textContent = `${interval}ms 前`;
+          }
+          lastReceivedTime = now;
+
+          draw();
+        }
+      };
+
+      ws.onclose = () => {
+        setUI(false);
+        myId = null;
+        myIdEl.textContent = 'なし';
+        state = { players: {} };
+        draw();
+        ws = null;
+      };
+
+      ws.onerror = () => console.error('WebSocket エラー');
+    });
+
+    btnDisc.addEventListener('click', () => { if (ws) ws.close(); });
+
+    // 入力（方向だけ送る）
+    document.addEventListener('keydown', (e) => {
+      let direction = null;
+      switch (e.key) {
+        case 'ArrowUp':    direction = 'up';    break;
+        case 'ArrowDown':  direction = 'down';  break;
+        case 'ArrowLeft':  direction = 'left';  break;
+        case 'ArrowRight': direction = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', direction }));
+    });
+
+    // 描画（サーバーから受け取った状態をそのまま描く）
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // グリッド
+      ctx.strokeStyle = '#1a3a6e';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 50) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 50) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      if (!state.players) return;
+
+      for (const [id, player] of Object.entries(state.players)) {
+        const isMe = id === myId;
+
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, isMe ? 18 : 14, 0, Math.PI * 2);
+        ctx.fillStyle = player.color;
+        ctx.fill();
+
+        if (isMe) {
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
+        ctx.fillStyle = isMe ? 'white' : '#ccc';
+        ctx.font = isMe ? 'bold 12px sans-serif' : '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(isMe ? `★ ${id}` : id, player.x, player.y - 22);
+
+        // 方向矢印
+        const arrows = { up: '↑', down: '↓', left: '←', right: '→' };
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.font = '14px sans-serif';
+        ctx.fillText(arrows[player.direction] || '', player.x, player.y + 5);
+      }
+    }
+
+    draw(); // 初期描画
+  </script>
+</body>
+</html>

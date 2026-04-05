@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 10: 切断・再接続</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #1a1a2e; color: white; }
+    h1 { color: #eee; }
+    #status { padding: 8px 12px; border-radius: 4px; margin-bottom: 8px; font-weight: bold; display: inline-block; }
+    .connected      { background: #155724; }
+    .disconnected   { background: #721c24; }
+    .reconnecting   { background: #856404; }
+    canvas { border: 2px solid #444; display: block; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #log {
+      background: rgba(0,0,0,0.5);
+      border: 1px solid #333;
+      padding: 8px;
+      height: 120px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    .hint { color: #888; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Step 10: 切断・再接続</h1>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+    <button id="btnAutoReconnect">自動再接続 ON</button>
+  </div>
+
+  <div id="status" class="disconnected">切断中</div>
+  <div style="font-size:13px; color:#aaa; margin-bottom:8px;">
+    自分のID: <span id="myIdEl">なし</span> /
+    再接続回数: <span id="reconnectCount">0</span>
+  </div>
+
+  <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+  <div id="log"></div>
+  <p class="hint">
+    「自動再接続 ON」をクリックしてから切断ボタン or WiFiをオフにして挙動を確認<br>
+    サーバーの ping/pong 設定を変えてタイムアウトを体験できます
+  </p>
+
+  <script>
+    const GRID = 20;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    let ws              = null;
+    let myId            = null;
+    let state           = { snakes: {} };
+    let autoReconnect   = false;
+    let reconnectTimer  = null;
+    let reconnectCount  = 0;
+    const RECONNECT_DELAY = 3000; // 3秒後に再接続
+
+    const statusEl        = document.getElementById('status');
+    const myIdEl          = document.getElementById('myIdEl');
+    const reconnectCountEl= document.getElementById('reconnectCount');
+    const btnConn         = document.getElementById('btnConnect');
+    const btnDisc         = document.getElementById('btnDisconnect');
+    const btnAutoReconn   = document.getElementById('btnAutoReconnect');
+    const logEl           = document.getElementById('log');
+
+    function addLog(msg, type = 'info') {
+      const colors = { info: '#aaa', warn: '#ffeaa7', error: '#ff6b6b', success: '#4ecdc4' };
+      const div = document.createElement('div');
+      div.style.color = colors[type] || '#aaa';
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text, cssClass) {
+      statusEl.textContent = text;
+      statusEl.className   = cssClass;
+    }
+
+    btnAutoReconn.addEventListener('click', () => {
+      autoReconnect = !autoReconnect;
+      btnAutoReconn.textContent = `自動再接続 ${autoReconnect ? 'ON' : 'OFF'}`;
+      btnAutoReconn.style.background = autoReconnect ? '#28a745' : '#6c757d';
+    });
+
+    function connect() {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
+      setStatus('接続中...', 'reconnecting');
+      addLog('接続を試みます...', 'info');
+
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => {
+        setStatus('接続中', 'connected');
+        addLog('接続しました', 'success');
+        btnConn.disabled = true;
+        btnDisc.disabled = false;
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.myId) {
+          myId = msg.myId;
+          myIdEl.textContent = myId;
+        }
+        if (msg.type === 'state' && msg.snakes) {
+          state = msg;
+          draw();
+        }
+      };
+
+      ws.onclose = (event) => {
+        setStatus('切断中', 'disconnected');
+        addLog(`切断されました (code: ${event.code}, reason: ${event.reason || 'なし'})`, 'warn');
+        btnConn.disabled = false;
+        btnDisc.disabled = true;
+        myId = null;
+        state = { snakes: {} };
+        draw();
+        ws = null;
+
+        // 自動再接続
+        if (autoReconnect) {
+          reconnectCount++;
+          reconnectCountEl.textContent = reconnectCount;
+          addLog(`${RECONNECT_DELAY/1000}秒後に再接続します（${reconnectCount}回目）`, 'info');
+          reconnectTimer = setTimeout(connect, RECONNECT_DELAY);
+        }
+      };
+
+      ws.onerror = (error) => {
+        addLog('接続エラー', 'error');
+        console.error('WebSocket error:', error);
+      };
+    }
+
+    btnConn.addEventListener('click', connect);
+
+    btnDisc.addEventListener('click', () => {
+      autoReconnect = false;
+      btnAutoReconn.textContent = '自動再接続 OFF';
+      btnAutoReconn.style.background = '#6c757d';
+      if (ws) ws.close(1000, '手動切断');
+    });
+
+    document.addEventListener('keydown', (e) => {
+      let dir = null;
+      switch (e.key) {
+        case 'ArrowUp':    dir = 'up';    break;
+        case 'ArrowDown':  dir = 'down';  break;
+        case 'ArrowLeft':  dir = 'left';  break;
+        case 'ArrowRight': dir = 'right'; break;
+        default: return;
+      }
+      e.preventDefault();
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', direction: dir }));
+    });
+
+    function draw() {
+      ctx.fillStyle = '#0f3460';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      for (let x = 0; x < canvas.width; x += GRID) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += GRID) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      if (!state.snakes) return;
+      for (const [id, snake] of Object.entries(state.snakes)) {
+        if (!snake.body) continue;
+        const isMe = id === myId;
+        for (let i = 0; i < snake.body.length; i++) {
+          const seg = snake.body[i];
+          ctx.fillStyle = i === 0 ? snake.color : 'rgba(80,80,80,0.7)';
+          ctx.fillRect(seg.x + 1, seg.y + 1, GRID - 2, GRID - 2);
+        }
+        if (isMe && snake.body.length > 0) {
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(snake.body[0].x, snake.body[0].y, GRID, GRID);
+        }
+      }
+    }
+
+    draw();
+  </script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 3: 入力送信</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }
+    h1 { color: #333; }
+    #status { padding: 8px 12px; border-radius: 4px; margin-bottom: 16px; font-weight: bold; }
+    .connected    { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+    #myId { margin-bottom: 8px; color: #555; }
+    #myDirection {
+      font-size: 48px;
+      text-align: center;
+      padding: 20px;
+      background: white;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    #players {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    .player-row { padding: 4px 0; font-family: monospace; }
+    .me { font-weight: bold; color: #007bff; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .hint { color: #6c757d; font-size: 13px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Step 3: 入力送信</h1>
+
+  <div id="status" class="disconnected">切断中</div>
+  <div id="myId">自分のID: なし</div>
+
+  <div class="controls" style="margin-bottom: 16px;">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <!-- 自分の現在方向を大きく表示 -->
+  <div id="myDirection">⬜ 未入力</div>
+  <p class="hint">矢印キー（↑↓←→）を押してください。ページスクロールは e.preventDefault() で防いでいます。</p>
+
+  <!-- 全プレイヤーの入力状態 -->
+  <h3>全プレイヤーの方向</h3>
+  <div id="players">接続待ち...</div>
+
+  <script>
+    let ws = null;
+    let myId = null;
+
+    // 方向に対応する矢印文字
+    const ARROWS = {
+      up:    '⬆️ 上',
+      down:  '⬇️ 下',
+      left:  '⬅️ 左',
+      right: '➡️ 右',
+    };
+
+    const status      = document.getElementById('status');
+    const myIdEl      = document.getElementById('myId');
+    const myDirEl     = document.getElementById('myDirection');
+    const playersEl   = document.getElementById('players');
+    const btnConnect  = document.getElementById('btnConnect');
+    const btnDisc     = document.getElementById('btnDisconnect');
+
+    function setUI(connected) {
+      status.textContent = connected ? '接続中' : '切断中';
+      status.className = connected ? 'connected' : 'disconnected';
+      btnConnect.disabled = connected;
+      btnDisc.disabled = !connected;
+    }
+
+    btnConnect.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => {
+        setUI(true);
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'ack') {
+          // サーバーから自分のIDが通知された
+          myId = msg.playerId;
+          myIdEl.textContent = `自分のID: ${myId}`;
+
+        } else if (msg.type === 'state') {
+          // 全プレイヤーの入力状態が更新された
+          updatePlayersDisplay(msg.inputs);
+
+          // 自分の方向を更新
+          if (myId && msg.inputs[myId]) {
+            myDirEl.textContent = ARROWS[msg.inputs[myId]] || '?';
+          }
+        }
+      };
+
+      ws.onclose = () => {
+        setUI(false);
+        myId = null;
+        myIdEl.textContent = '自分のID: なし';
+        myDirEl.textContent = '⬜ 未入力';
+        playersEl.textContent = '接続待ち...';
+        ws = null;
+      };
+
+      ws.onerror = () => {
+        console.error('WebSocket エラー');
+      };
+    });
+
+    btnDisc.addEventListener('click', () => {
+      if (ws) ws.close();
+    });
+
+    // 全プレイヤーの方向を表示
+    function updatePlayersDisplay(inputs) {
+      if (Object.keys(inputs).length === 0) {
+        playersEl.textContent = 'プレイヤーなし';
+        return;
+      }
+      playersEl.innerHTML = '';
+      for (const [id, dir] of Object.entries(inputs)) {
+        const div = document.createElement('div');
+        div.className = 'player-row' + (id === myId ? ' me' : '');
+        div.textContent = `${id === myId ? '★ ' : '  '}${id}: ${ARROWS[dir] || dir}`;
+        playersEl.appendChild(div);
+      }
+    }
+
+    // キーボード入力を検知してサーバーに送る
+    document.addEventListener('keydown', (e) => {
+      let direction = null;
+
+      switch (e.key) {
+        case 'ArrowUp':    direction = 'up';    break;
+        case 'ArrowDown':  direction = 'down';  break;
+        case 'ArrowLeft':  direction = 'left';  break;
+        case 'ArrowRight': direction = 'right'; break;
+        default: return; // 矢印キー以外は無視
+      }
+
+      // 矢印キーによるページスクロールを防ぐ
+      e.preventDefault();
+
+      // 接続中のみ送信
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      // JSON形式で入力を送信
+      // 「どこに行きたいか」だけ送る（座標は送らない）
+      const msg = {
+        type: 'input',
+        direction: direction,
+      };
+      ws.send(JSON.stringify(msg));
+    });
+  </script>
+</body>
+</html>

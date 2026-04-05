@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Step 2: ブロードキャスト</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }
+    h1 { color: #333; }
+    #status { padding: 8px 12px; border-radius: 4px; margin-bottom: 8px; font-weight: bold; }
+    #counter { margin-bottom: 16px; color: #555; }
+    .connected    { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+    .controls { display: flex; gap: 8px; margin-bottom: 16px; }
+    input[type="text"] { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    #btnSend       { background: #28a745; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #log { background: white; border: 1px solid #ddd; border-radius: 4px; padding: 12px; height: 300px; overflow-y: auto; font-family: monospace; font-size: 13px; }
+    .log-chat   { color: #333; }
+    .log-system { color: #6c757d; font-style: italic; }
+    .log-error  { color: #dc3545; }
+  </style>
+</head>
+<body>
+  <h1>Step 2: ブロードキャスト</h1>
+
+  <div id="status" class="disconnected">切断中</div>
+  <div id="counter">接続人数: 0人</div>
+
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <div class="controls">
+    <input type="text" id="input" placeholder="メッセージを入力..." disabled>
+    <button id="btnSend" disabled>送信</button>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    let ws = null;
+
+    const status  = document.getElementById('status');
+    const counter = document.getElementById('counter');
+    const btnConn = document.getElementById('btnConnect');
+    const btnDisc = document.getElementById('btnDisconnect');
+    const btnSend = document.getElementById('btnSend');
+    const input   = document.getElementById('input');
+    const log     = document.getElementById('log');
+
+    function addLog(text, type = 'system') {
+      const div = document.createElement('div');
+      div.className = `log-${type}`;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setUI(connected) {
+      status.textContent = connected ? '接続中' : '切断中';
+      status.className = connected ? 'connected' : 'disconnected';
+      btnConn.disabled = connected;
+      btnDisc.disabled = !connected;
+      btnSend.disabled = !connected;
+      input.disabled = !connected;
+    }
+
+    btnConn.addEventListener('click', () => {
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      ws.onopen = () => {
+        addLog('接続しました', 'system');
+        setUI(true);
+      };
+
+      ws.onmessage = (event) => {
+        // サーバーから受け取るのは JSON 形式
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'system') {
+          // システムメッセージ（入退室など）
+          addLog(`★ ${msg.content}`, 'system');
+        } else if (msg.type === 'chat') {
+          // チャットメッセージ
+          addLog(msg.content, 'chat');
+        }
+
+        // 接続人数を更新
+        counter.textContent = `接続人数: ${msg.count}人`;
+      };
+
+      ws.onclose = () => {
+        addLog('切断しました', 'system');
+        setUI(false);
+        ws = null;
+      };
+
+      ws.onerror = () => {
+        addLog('エラーが発生しました', 'error');
+      };
+    });
+
+    btnDisc.addEventListener('click', () => {
+      if (ws) ws.close();
+    });
+
+    btnSend.addEventListener('click', sendMessage);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    function sendMessage() {
+      const text = input.value.trim();
+      if (!text || !ws) return;
+      // テキストをそのまま送信（サーバーがJSONにラップして全員に配る）
+      ws.send(text);
+      input.value = '';
+    }
+  </script>
+</body>
+</html>

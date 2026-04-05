@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Step 1: WebSocket エコー</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #f5f5f5;
+    }
+    h1 { color: #333; }
+    #status {
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 16px;
+      font-weight: bold;
+    }
+    .connected    { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+    .connecting   { background: #fff3cd; color: #856404; }
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #btnConnect    { background: #007bff; color: white; }
+    #btnDisconnect { background: #dc3545; color: white; }
+    #btnSend       { background: #28a745; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #log {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 12px;
+      height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .log-send    { color: #007bff; }
+    .log-receive { color: #28a745; }
+    .log-system  { color: #6c757d; font-style: italic; }
+    .log-error   { color: #dc3545; }
+  </style>
+</head>
+<body>
+  <h1>Step 1: WebSocket エコー</h1>
+
+  <!-- 接続状態表示 -->
+  <div id="status" class="disconnected">切断中</div>
+
+  <!-- 接続・切断ボタン -->
+  <div class="controls">
+    <button id="btnConnect">接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+
+  <!-- メッセージ送信 -->
+  <div class="controls">
+    <input type="text" id="input" placeholder="送信するメッセージを入力..." disabled>
+    <button id="btnSend" disabled>送信</button>
+  </div>
+
+  <!-- ログ表示 -->
+  <div id="log"></div>
+
+  <script>
+    // WebSocket インスタンス（最初は null）
+    let ws = null;
+
+    // DOM要素の取得
+    const status     = document.getElementById('status');
+    const btnConnect = document.getElementById('btnConnect');
+    const btnDisc    = document.getElementById('btnDisconnect');
+    const btnSend    = document.getElementById('btnSend');
+    const input      = document.getElementById('input');
+    const log        = document.getElementById('log');
+
+    // ログにメッセージを追加する関数
+    function addLog(text, type = 'system') {
+      const div = document.createElement('div');
+      div.className = `log-${type}`;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+      log.appendChild(div);
+      // 自動スクロール（常に最新を表示）
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // UI の状態を更新する関数
+    function setConnected(connected) {
+      if (connected) {
+        status.textContent = '接続中';
+        status.className = 'connected';
+        btnConnect.disabled = true;
+        btnDisc.disabled = false;
+        btnSend.disabled = false;
+        input.disabled = false;
+      } else {
+        status.textContent = '切断中';
+        status.className = 'disconnected';
+        btnConnect.disabled = false;
+        btnDisc.disabled = true;
+        btnSend.disabled = true;
+        input.disabled = true;
+      }
+    }
+
+    // 接続ボタンのクリック処理
+    btnConnect.addEventListener('click', () => {
+      // 接続中状態にする
+      status.textContent = '接続中...';
+      status.className = 'connecting';
+      btnConnect.disabled = true;
+
+      // WebSocket 接続を作成
+      // ws:// はWebSocketのプロトコル（wss:// はSSL対応版）
+      ws = new WebSocket('ws://localhost:8080/ws');
+
+      // 接続が確立したとき
+      ws.onopen = () => {
+        addLog('サーバーに接続しました', 'system');
+        setConnected(true);
+      };
+
+      // メッセージを受信したとき
+      ws.onmessage = (event) => {
+        // event.data に受信したデータが入っている
+        addLog(`受信: ${event.data}`, 'receive');
+      };
+
+      // 接続が閉じたとき
+      ws.onclose = (event) => {
+        // event.code: 切断コード（1000 = 正常切断）
+        addLog(`切断しました (code: ${event.code})`, 'system');
+        setConnected(false);
+        ws = null;
+      };
+
+      // エラーが発生したとき
+      ws.onerror = (error) => {
+        addLog('エラーが発生しました', 'error');
+        console.error('WebSocket エラー:', error);
+      };
+    });
+
+    // 切断ボタンのクリック処理
+    btnDisc.addEventListener('click', () => {
+      if (ws) {
+        ws.close(); // 接続を閉じる（onclose が呼ばれる）
+      }
+    });
+
+    // 送信ボタンのクリック処理
+    btnSend.addEventListener('click', sendMessage);
+
+    // Enterキーでも送信できるようにする
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    // メッセージ送信関数
+    function sendMessage() {
+      const text = input.value.trim();
+      if (!text || !ws) return;
+
+      // メッセージを送信
+      ws.send(text);
+      addLog(`送信: ${text}`, 'send');
+
+      // 入力欄をクリア
+      input.value = '';
+    }
+  </script>
+</body>
+</html>
