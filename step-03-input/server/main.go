@@ -17,18 +17,18 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// Client は接続と書き込みロックをまとめた構造体。
+// Client は接続と書き込みロックをまとめた構造体
 //
 // gorilla/websocket は「同一コネクションへの WriteMessage 系呼び出しは
-// 同時に1つだけ」という制約がある。
+// 同時に1つだけ」という制約がある
 // broadcast() は複数の接続ハンドラ goroutine から同時に呼ばれ得るため、
-// すべての WriteMessage を writeMu で直列化する。
+// すべての WriteMessage を writeMu で直列化する
 type Client struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
 }
 
-// writeText は writeMu を取得してからメッセージを送る。
+// writeText は writeMu を取得してからメッセージを送る
 func (c *Client) writeText(data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -42,19 +42,24 @@ type ClientMessage struct {
 }
 
 // ServerMessage はサーバーからクライアントへ送るメッセージの形式
+//
+// Type には2種類ある:
+//   - "ack"   : 接続直後に1回だけ送る確認応答。自分のプレイヤーIDを通知する。
+//   - "state" : 誰かが入力するたびに全クライアントへ送る状態配信。
+//     全プレイヤーの最新入力方向を inputs マップとして渡す。
 type ServerMessage struct {
 	Type     string            `json:"type"`     // "ack" または "state"
 	PlayerID string            `json:"playerId"` // 自分のID（ack時）
 	Inputs   map[string]string `json:"inputs"`   // 全プレイヤーの最新入力（state時）
 }
 
+// clients は接続中のクライアント（プレイヤーID → Client）
+var clients = make(map[string]*Client)
+
 // playerInputs は各プレイヤーの最新入力方向を保持するmap
 // キー: プレイヤーID（接続ごとに割り当てる）
 // 値: 最新の方向 ("up" / "down" / "left" / "right")
 var playerInputs = make(map[string]string)
-
-// clients は接続中のクライアント（プレイヤーID → Client）
-var clients = make(map[string]*Client)
 
 var mu sync.Mutex
 
@@ -138,8 +143,8 @@ func handleWebSocket(c echo.Context) error {
 	// 切断時の後処理
 	defer func() {
 		mu.Lock()
-		delete(clients, playerID)
-		delete(playerInputs, playerID)
+		delete(clients, playerID)      // クライアント一覧から削除
+		delete(playerInputs, playerID) // プレイヤーの入力状態も削除
 		mu.Unlock()
 		log.Printf("プレイヤー切断: %s", playerID)
 	}()
