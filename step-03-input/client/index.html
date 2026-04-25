@@ -49,6 +49,7 @@
   <!-- 自分の現在方向を大きく表示 -->
   <div id="myDirection">⬜ 未入力</div>
   <p class="hint">矢印キー（↑↓←→）を押してください。ページスクロールは e.preventDefault() で防いでいます。</p>
+  <p class="hint">入力回数: <span id="keyCounter">0</span></p>
 
   <!-- 全プレイヤーの入力状態 -->
   <h3>全プレイヤーの方向</h3>
@@ -57,6 +58,7 @@
   <script>
     let ws = null;
     let myId = null;
+    let keyCounter = 0;
 
     // 方向に対応する矢印文字
     const ARROWS = {
@@ -143,10 +145,14 @@
     document.addEventListener('keydown', (e) => {
       let direction = null;
 
-      switch (e.key) {
-        case 'ArrowUp':    direction = 'up';    break;
+      switch (e.code) {
+        case 'KeyW':
+        case 'ArrowUp' : direction = 'up';    break;
+        case 'KeyS':
         case 'ArrowDown':  direction = 'down';  break;
+        case 'KeyA':
         case 'ArrowLeft':  direction = 'left';  break;
+        case 'KeyD':
         case 'ArrowRight': direction = 'right'; break;
         default: return; // 矢印キー以外は無視
       }
@@ -156,6 +162,9 @@
 
       // 接続中のみ送信
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      // 入力回数をカウント
+      keyCounter++;
+      document.getElementById('keyCounter').textContent = keyCounter;
 
       // JSON形式で入力を送信
       // 「どこに行きたいか」だけ送る（座標は送らない）
