@@ -63,11 +63,14 @@
     let myId  = null;
 
     // --- 補間用の状態 ---
-    // 「前のスナップショット」と「次のスナップショット」を持つ
-    let prevSnapshot       = null;  // 1つ前のサーバー状態
-    let nextSnapshot       = null;  // 最新のサーバー状態
-    let prevSnapshotTime   = 0;     // prevSnapshot を受け取った時刻
-    let nextSnapshotTime   = 0;     // nextSnapshot を受け取った時刻
+    // サーバーから受け取った「前の位置」と「次の位置」を持つ
+    const interpolation = {
+      prevSnapshot: null,  // 1つ前のサーバー状態
+      nextSnapshot: null,  // 最新のサーバー状態
+      prevTime: 0,         // 前のスナップショットを受け取った時刻
+      nextTime: 0,         // 次の位置に到達する表示上の時刻
+    };
+    let lastSnapshotReceiveTime = 0;
 
     // 補間なし用（単純に最新状態を持つ）
     let rawState = { snakes: {} };
@@ -105,16 +108,22 @@
           rawState = msg;
 
           // 補間あり: 前の状態を保存してから新しい状態を設定
-          if (nextSnapshot !== null) {
-            prevSnapshot     = nextSnapshot;
-            prevSnapshotTime = nextSnapshotTime;
+          const lastReceiveInterval = lastSnapshotReceiveTime > 0
+            ? now - lastSnapshotReceiveTime
+            : 100;
+          const interpolationDuration = Math.max(50, Math.min(lastReceiveInterval, 500));
+
+          if (interpolation.nextSnapshot !== null) {
+            interpolation.prevSnapshot = interpolation.nextSnapshot;
+            interpolation.prevTime     = now;
           } else {
             // 初回は同じものを入れる
-            prevSnapshot     = msg;
-            prevSnapshotTime = now;
+            interpolation.prevSnapshot = msg;
+            interpolation.prevTime     = now;
           }
-          nextSnapshot     = msg;
-          nextSnapshotTime = now;
+          interpolation.nextSnapshot = msg;
+          interpolation.nextTime     = now + interpolationDuration;
+          lastSnapshotReceiveTime    = now;
 
           tickEl.textContent = msg.tickCount;
         }
@@ -124,8 +133,11 @@
         setUI(false);
         ws = null;
         rawState = { snakes: {} };
-        prevSnapshot = null;
-        nextSnapshot = null;
+        interpolation.prevSnapshot = null;
+        interpolation.nextSnapshot = null;
+        interpolation.prevTime = 0;
+        interpolation.nextTime = 0;
+        lastSnapshotReceiveTime = 0;
       };
 
       ws.onerror = () => console.error('WebSocket エラー');
@@ -153,24 +165,38 @@
       return a + (b - a) * t;
     }
 
+    /**
+     * 2つの位置を補間する
+     * @param {Object} prevPos - 前の位置 {x, y}
+     * @param {Object} nextPos - 次の位置 {x, y}
+     * @param {number} t - 補間係数（0.0〜1.0）
+     * @returns {Object} 補間後の位置 {x, y}
+     */
+    function getInterpolatedPosition(prevPos, nextPos, t) {
+      return {
+        x: lerp(prevPos.x, nextPos.x, t),
+        y: lerp(prevPos.y, nextPos.y, t),
+      };
+    }
+
     // 補間係数 t を計算する（0.0〜1.0）
-    function calcT() {
-      if (!prevSnapshot || !nextSnapshot) return 0;
+    function calcInterpolationT() {
+      if (!interpolation.prevSnapshot || !interpolation.nextSnapshot) return 0;
       const now      = Date.now();
-      const elapsed  = now - prevSnapshotTime;
-      const duration = nextSnapshotTime - prevSnapshotTime;
+      const elapsed  = now - interpolation.prevTime;
+      const duration = interpolation.nextTime - interpolation.prevTime;
       if (duration <= 0) return 1;
       return Math.min(elapsed / duration, 1.0);
     }
 
     // --- ゲームループ（requestAnimationFrame） ---
     // サーバーからの受信に関係なく、毎フレーム描画する
-    function gameLoop() {
+    function gameLoop(timestamp) {
       // 補間なし: 受け取った状態をそのまま描画
       drawRaw();
 
       // 補間あり: 前後のスナップショットを補間して描画
-      const t = calcT();
+      const t = calcInterpolationT();
       tEl.textContent = t.toFixed(2);
       drawInterpolated(t);
 
@@ -190,24 +216,21 @@
     // --- 描画：補間あり ---
     function drawInterpolated(t) {
       drawBackground(interpCtx, interpCanvas);
-      if (!nextSnapshot || !nextSnapshot.snakes) return;
+      if (!interpolation.nextSnapshot || !interpolation.nextSnapshot.snakes) return;
 
-      for (const [id, nextSnake] of Object.entries(nextSnapshot.snakes)) {
+      for (const [id, nextSnake] of Object.entries(interpolation.nextSnapshot.snakes)) {
         if (!nextSnake.body) continue;
 
         // 補間後のbody位置を計算する
         let interpBody;
 
-        if (prevSnapshot && prevSnapshot.snakes && prevSnapshot.snakes[id]) {
-          const prevSnake = prevSnapshot.snakes[id];
+        if (interpolation.prevSnapshot && interpolation.prevSnapshot.snakes && interpolation.prevSnapshot.snakes[id]) {
+          const prevSnake = interpolation.prevSnapshot.snakes[id];
           // prevとnextのbodyが同じ長さであれば補間する
           const len = Math.min(prevSnake.body.length, nextSnake.body.length);
           interpBody = [];
           for (let i = 0; i < len; i++) {
-            interpBody.push({
-              x: lerp(prevSnake.body[i].x, nextSnake.body[i].x, t),
-              y: lerp(prevSnake.body[i].y, nextSnake.body[i].y, t),
-            });
+            interpBody.push(getInterpolatedPosition(prevSnake.body[i], nextSnake.body[i], t));
           }
         } else {
           // 前の状態がなければそのまま
