@@ -58,7 +58,7 @@ type ServerMessage struct {
 	MyID    string             `json:"myId,omitempty"` // 自分のIDをack時に通知
 }
 
-// ゲームのグローバル状態
+// ゲームのグローバル状態 全ての情報が以下に集約される。これがサーバーの「真実」
 // サーバーが「真実」として保持する
 var (
 	players = make(map[string]*Player)
@@ -94,7 +94,7 @@ func main() {
 
 // broadcast は現在のゲーム状態を全クライアントに送信する
 func broadcast() {
-	mu.RLock()
+	mu.RLock() // ロックをしないと同時に呼ばれて壊れる
 	// 状態のスナップショットを作成
 	playersCopy := make(map[string]*Player, len(players))
 	for id, p := range players {
