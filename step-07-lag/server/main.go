@@ -50,6 +50,11 @@ const (
 	// 300 = 最大300msのランダム遅延（ジッター模擬）
 	maxRandomDelayMs = 0
 
+	// パケットロス率（実際には state メッセージの送信スキップ率）
+	// 0.0 = ロスなし（通常）
+	// 0.1 = 10% の state メッセージを送らない
+	packetLossRate = 0.1
+
 	fieldWidth  = 800
 	fieldHeight = 600
 	gridSize    = 20
@@ -107,7 +112,8 @@ func main() {
 	fmt.Printf("サーバー起動: http://localhost:8080\n")
 	fmt.Printf("tick間隔: %v\n", tickRate)
 	fmt.Printf("最大ランダム遅延: %dms\n", maxRandomDelayMs)
-	fmt.Println("遅延実験: main.go の定数を変えて試してください")
+	fmt.Printf("パケットロス率: %.1f%%\n", packetLossRate*100)
+	fmt.Println("遅延・パケットロス実験: main.go の定数を変えて試してください")
 	log.Fatal(e.Start(":8080"))
 }
 
@@ -158,10 +164,18 @@ func moveSnake(snake *Snake) {
 		newHead = Point{X: head.X + gridSize, Y: head.Y}
 	}
 
-	if newHead.X < 0 { newHead.X = fieldWidth - gridSize }
-	if newHead.X >= fieldWidth { newHead.X = 0 }
-	if newHead.Y < 0 { newHead.Y = fieldHeight - gridSize }
-	if newHead.Y >= fieldHeight { newHead.Y = 0 }
+	if newHead.X < 0 {
+		newHead.X = fieldWidth - gridSize
+	}
+	if newHead.X >= fieldWidth {
+		newHead.X = 0
+	}
+	if newHead.Y < 0 {
+		newHead.Y = fieldHeight - gridSize
+	}
+	if newHead.Y >= fieldHeight {
+		newHead.Y = 0
+	}
 
 	snake.Body = append([]Point{newHead}, snake.Body...)
 	if len(snake.Body) > 5 { // 固定の長さ（このステップではエサなし）
@@ -203,11 +217,20 @@ func broadcastState(delay int) {
 		return
 	}
 
-	for _, client := range clientsCopy {
+	for id, client := range clientsCopy {
+		if shouldDropStateMessage() {
+			log.Printf("broadcastState: state メッセージを破棄 client=%s tick=%d lossRate=%.1f%%", id, tick, packetLossRate*100)
+			continue
+		}
+
 		if err := client.writeText(data); err != nil {
 			log.Printf("broadcastState: 送信エラー: %v", err)
 		}
 	}
+}
+
+func shouldDropStateMessage() bool {
+	return packetLossRate > 0 && rand.Float64() < packetLossRate
 }
 
 func handleWebSocket(c echo.Context) error {
@@ -228,8 +251,8 @@ func handleWebSocket(c echo.Context) error {
 	body := []Point{}
 	for i := 0; i < 5; i++ {
 		body = append(body, Point{
-			X: float64((10-i) * gridSize),
-			Y: float64(((counter - 1) % 10) * 3 * gridSize + gridSize),
+			X: float64((10 - i) * gridSize),
+			Y: float64(((counter-1)%10)*3*gridSize + gridSize),
 		})
 	}
 	snakes[snakeID] = &Snake{
