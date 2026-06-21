@@ -62,11 +62,12 @@ type ServerMessage struct {
 var (
 	players   = make(map[string]*Player)
 	clients   = make(map[string]*Client)
-	mu        sync.RWMutex
+	mu        sync.RWMutex // players と clients を保護する RWMutex
 	counter   int
 	tickCount int64
 )
 
+// ユーザーのアイコンカラー
 var playerColors = []string{
 	"#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4",
 	"#ffeaa7", "#dda0dd", "#98d8c8", "#f7dc6f",
@@ -82,7 +83,9 @@ const (
 func main() {
 	e := echo.New()
 	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+	e.Use(middleware.Recover()) // パニックが起きてもサーバーが落ちないようにする
+
+	// クライアントの静的ファイルを配信
 	e.Static("/", "../client")
 	e.GET("/ws", handleWebSocket)
 
@@ -151,15 +154,18 @@ func movePlayer(p *Player) {
 // broadcastState は全クライアントにゲーム状態を送信する
 func broadcastState() {
 	mu.RLock()
+
 	playersCopy := make(map[string]*Player, len(players))
 	for id, p := range players {
 		cp := *p
 		playersCopy[id] = &cp
 	}
+
 	clientsCopy := make(map[string]*Client, len(clients))
 	for id, c := range clients {
 		clientsCopy[id] = c
 	}
+
 	tick := tickCount
 	mu.RUnlock()
 

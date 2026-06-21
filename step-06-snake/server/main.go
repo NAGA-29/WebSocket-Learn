@@ -41,10 +41,10 @@ func (c *Client) writeText(data []byte) error {
 const (
 	fieldWidth  = 800
 	fieldHeight = 600
-	gridSize    = 20                      // 1マスのサイズ（px）
-	tickRate    = 150 * time.Millisecond  // 1秒あたり約7tick（蛇ゲームらしい速度）
-	initialLen  = 5                       // 蛇の初期の長さ（マス数）
-	foodCount   = 5                       // フィールド上のエサ数
+	gridSize    = 20                     // 1マスのサイズ（px）
+	tickRate    = 150 * time.Millisecond // 1秒あたり約7tick（蛇ゲームらしい速度）
+	initialLen  = 5                      // 蛇の初期の長さ（マス数）
+	foodCount   = 5                      // フィールド上のエサ数
 )
 
 // Point はグリッド上の1点
@@ -108,7 +108,7 @@ func main() {
 	e.Static("/", "../client")
 	e.GET("/ws", handleWebSocket)
 
-	go gameLoop()
+	go gameLoop() // ゲームループを別ゴルーチンで実行
 
 	fmt.Println("サーバー起動: http://localhost:8080")
 	log.Fatal(e.Start(":8080"))
@@ -151,7 +151,7 @@ func isOppositeDirection(current, next string) bool {
 
 // gameLoop はメインのゲームループ
 func gameLoop() {
-	ticker := time.NewTicker(tickRate)
+	ticker := time.NewTicker(tickRate) // tickRate ごとにゲーム状態を更新 150ms
 	defer ticker.Stop()
 
 	for {
@@ -172,6 +172,13 @@ func updateGame() {
 }
 
 // moveSnake は蛇を1マス前進させる
+// 1. 現在の頭 Body[0] を見る
+// 2. Direction に応じて新しい頭の座標を計算する
+// 3. 画面外に出たら反対側へワープする
+// 4. 新しい頭を Body の先頭に追加する
+// 5. エサと重なったかチェックする
+// 6. 食べていなければ尻尾を削る
+// 7. 食べていれば尻尾を削らず、長さが1増える
 func moveSnake(snake *Snake) {
 	if len(snake.Body) == 0 {
 		return
@@ -271,6 +278,13 @@ func broadcastState() {
 	}
 }
 
+// 1. WebSocket接続を作る
+// 2. snake-1, snake-2 のようなIDを発行する
+// 3. 色を割り当てる
+// 4. 初期位置を少しずらして蛇を作る
+// 5. snakes と clients に登録する
+// 6. クライアントへ自分の myId を返す
+// 7. 切断時に snakes と clients から削除する
 func handleWebSocket(c echo.Context) error {
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
@@ -290,7 +304,7 @@ func handleWebSocket(c echo.Context) error {
 	cols := fieldWidth / gridSize
 	startCol := ((counter - 1) * 8) % (cols - initialLen)
 	startX := float64((startCol + initialLen) * gridSize)
-	startY := float64(((counter-1)*5)%(fieldHeight/gridSize-1) * gridSize + gridSize)
+	startY := float64(((counter-1)*5)%(fieldHeight/gridSize-1)*gridSize + gridSize)
 
 	snake := createSnake(snakeID, playerColors[colorIdx], startX, startY)
 	snakes[snakeID] = snake
