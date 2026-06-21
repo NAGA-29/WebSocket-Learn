@@ -144,10 +144,18 @@ func moveSnake(snake *Snake) {
 	case "right":
 		newHead = Point{X: head.X + gridSize, Y: head.Y}
 	}
-	if newHead.X < 0 { newHead.X = fieldWidth - gridSize }
-	if newHead.X >= fieldWidth { newHead.X = 0 }
-	if newHead.Y < 0 { newHead.Y = fieldHeight - gridSize }
-	if newHead.Y >= fieldHeight { newHead.Y = 0 }
+	if newHead.X < 0 {
+		newHead.X = fieldWidth - gridSize
+	}
+	if newHead.X >= fieldWidth {
+		newHead.X = 0
+	}
+	if newHead.Y < 0 {
+		newHead.Y = fieldHeight - gridSize
+	}
+	if newHead.Y >= fieldHeight {
+		newHead.Y = 0
+	}
 
 	snake.Body = append([]Point{newHead}, snake.Body...)
 	if len(snake.Body) > 5 {
@@ -211,7 +219,7 @@ func handleWebSocket(c echo.Context) error {
 	body := []Point{}
 	for i := 0; i < 5; i++ {
 		body = append(body, Point{
-			X: float64((10-i) * gridSize),
+			X: float64((10 - i) * gridSize),
 			Y: float64(((counter-1)%10)*3*gridSize + gridSize),
 		})
 	}

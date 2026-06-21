@@ -48,6 +48,30 @@ lerp(a, b, t) = a + (b - a) * t
 
 ## 実装のアイデア
 
+補間では、サーバーから届いた最新位置へすぐ描画を飛ばしません。
+
+代わりに、クライアントは次の2つを覚えておきます。
+
+- いま画面に出している基準になる位置
+- サーバーから届いた新しい位置
+
+そして、`requestAnimationFrame` で毎フレーム少しずつ新しい位置へ近づけます。
+
+```
+サーバーから x=120 が届いた瞬間:
+  画面上の位置はまだ x=100
+
+次の数フレーム:
+  x=104
+  x=108
+  x=112
+  x=116
+  x=120
+
+結果:
+  一瞬で x=120 にワープせず、なめらかに移動して見える
+```
+
 ### クライアント側の状態
 
 ```javascript
@@ -56,9 +80,33 @@ const interpolation = {
   prevSnapshot: null,    // 1つ前のサーバー状態
   nextSnapshot: null,    // 最新のサーバー状態
   prevTime: 0,           // 前のスナップショットを受け取った時刻
-  nextTime: 0,           // 次のスナップショットを受け取った時刻
+  nextTime: 0,           // 次の位置に到達する表示上の時刻
 };
 ```
+
+`prevSnapshot` は補間のスタート地点、`nextSnapshot` はゴール地点です。
+
+`prevTime` と `nextTime` は「いつからいつまでの間に、スタート地点からゴール地点へ移動するか」を表します。
+
+このサンプルでは、サーバーから新しい状態を受け取ったときに、そこから少し時間をかけて新しい位置へ向かいます。
+
+```javascript
+const lastReceiveInterval = lastSnapshotReceiveTime > 0
+  ? now - lastSnapshotReceiveTime
+  : 100;
+const interpolationDuration = Math.max(50, Math.min(lastReceiveInterval, 500));
+
+interpolation.prevSnapshot = interpolation.nextSnapshot;
+interpolation.prevTime = now;
+interpolation.nextSnapshot = msg;
+interpolation.nextTime = now + interpolationDuration;
+```
+
+`interpolationDuration` は「何msかけて次の位置まで動かすか」です。
+
+- サーバー更新が約100msごとなら、約100msかけて次の位置へ動かす
+- 更新間隔が少しブレても、そのブレに合わせて補間時間を調整する
+- 極端に短すぎたり長すぎたりしないように、50ms〜500msに収める
 
 ### ゲームループ（クライアント側）
 
@@ -79,6 +127,22 @@ function gameLoop(timestamp) {
 }
 ```
 
+`t` は「スタート地点からゴール地点まで、今どのくらい進んだか」です。
+
+- `t = 0.0`: まだスタート地点
+- `t = 0.5`: ちょうど中間地点
+- `t = 1.0`: ゴール地点
+
+たとえば、100msかけて `x=100` から `x=120` へ移動する場合:
+
+| 経過時間 | t | 表示位置 |
+|---:|---:|---:|
+| 0ms | 0.0 | 100 |
+| 25ms | 0.25 | 105 |
+| 50ms | 0.5 | 110 |
+| 75ms | 0.75 | 115 |
+| 100ms | 1.0 | 120 |
+
 ### 補間して描画
 
 ```javascript
@@ -93,6 +157,38 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 ```
+
+蛇は1つの点ではなく、頭から尻尾まで複数のマスでできています。
+
+そのため実装では、bodyの各マスについて同じ計算をしています。
+
+```javascript
+for (let i = 0; i < len; i++) {
+  interpBody.push(getInterpolatedPosition(prevSnake.body[i], nextSnake.body[i], t));
+}
+```
+
+つまり、頭だけでなく、体の各パーツもそれぞれ前回位置から今回位置へなめらかに移動します。
+
+### なぜ `requestAnimationFrame` が必要か
+
+WebSocketのメッセージは、サーバーのtickに合わせて100msごと程度にしか届きません。
+
+しかし画面は通常、1秒に60回前後描画できます。これは約16msごとです。
+
+```
+サーバー更新:
+  100msごと
+
+画面描画:
+  約16msごと
+```
+
+補間なしでは、サーバー更新が来た瞬間だけ位置が変わります。
+
+補間ありでは、サーバー更新とサーバー更新の間にある画面描画タイミングでも、中間位置を計算して描画します。
+
+これが「ぬるぬる動く」理由です。
 
 ---
 
@@ -155,9 +251,12 @@ Step 8（補間あり）:
 ```javascript
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
+  const now = Date.now();
+
   prevSnapshot = nextSnapshot;      // 1つ前の状態を保存
+  prevTime = now;                   // 補間の開始時刻
   nextSnapshot = msg;               // 新しい状態を保存
-  snapshotTimestamp = Date.now();   // 受け取り時刻を記録
+  nextTime = now + 100;             // 次の位置に到達する時刻
   // 描画は requestAnimationFrame に任せる
 };
 
