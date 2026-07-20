@@ -18,10 +18,12 @@ import (
 // 本番環境では絶対に使用しないこと。
 //
 // 本番向けの最低限の対策例:
-//   CheckOrigin: func(r *http.Request) bool {
-//       origin := r.Header.Get("Origin")
-//       return origin == "https://yourdomain.example.com"
-//   }
+//
+//	CheckOrigin: func(r *http.Request) bool {
+//	    origin := r.Header.Get("Origin")
+//	    return origin == "https://yourdomain.example.com"
+//	}
+//
 // さらに認証が必要な場合は JWT や Cookie セッションをアップグレード前に検証する。
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true }, // 開発専用: 全オリジン許可
@@ -64,7 +66,8 @@ type ClientMessage struct {
 // Client は接続と書き込みロックをまとめた構造体。
 //
 // gorilla/websocket の仕様:
-//   「同一コネクションへの WriteMessage 系呼び出しは同時に1つしか許可されない」
+//
+//	「同一コネクションへの WriteMessage 系呼び出しは同時に1つしか許可されない」
 //
 // broadcastState（gameLoop goroutine）と ping 送信 goroutine が
 // 同じ conn に並行して書き込む可能性があるため、
@@ -282,21 +285,12 @@ func handleWebSocket(c echo.Context) error {
 		}
 	}()
 
-	defer func() {
-		close(pingStop) // ping goroutine を止める
-
-		mu.Lock()
-		delete(snakes, id)
-		delete(clients, id)
-		mu.Unlock()
-		log.Printf("プレイヤー切断: %s", id)
-	}()
-
 	// メッセージ受信ループ
 	// read deadline を超えると ReadMessage がエラーを返す → 切断扱いになる
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
+			// NOTE: ping/pong で切断された場合も`err`に値が入ってくる
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("異常切断: %s: %v", id, err)
 			} else {
@@ -324,6 +318,16 @@ func handleWebSocket(c echo.Context) error {
 			mu.Unlock()
 		}
 	}
+
+	defer func() {
+		close(pingStop) // ping goroutine を止める
+
+		mu.Lock()
+		delete(snakes, id)
+		delete(clients, id)
+		mu.Unlock()
+		log.Printf("プレイヤー切断: %s", id)
+	}()
 
 	return nil
 }
