@@ -161,6 +161,8 @@ WebSocketは実はHTTPから始まります。
 これをアップグレード（Upgrade）と言います。
 だからWebSocketのURLは `ws://` または `wss://`（SSL対応）を使います。
 
+より詳しいハンドシェイク、フレーム構造、opcode、mask、ping/pong、close code については [WEBSOCKET_PROTOCOL.md](./WEBSOCKET_PROTOCOL.md) にまとめています。
+
 ---
 
 ## 理解チェック
