@@ -1,4 +1,4 @@
-module step03-input
+module step02-broadcast
 
 go 1.21
 

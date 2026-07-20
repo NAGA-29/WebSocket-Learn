@@ -52,7 +52,7 @@ type Snake struct {
     Body      []Point `json:"body"`      // body[0] が頭
     Direction string  `json:"direction"`
     Color     string  `json:"color"`
-    Alive     bool    `json:"alive"`
+    Score     int     `json:"score"`     // 食べたエサ数
 }
 
 type Food struct {
@@ -61,8 +61,10 @@ type Food struct {
 }
 
 type GameState struct {
+    Type   string            `json:"type"`
     Snakes map[string]*Snake `json:"snakes"`
     Foods  []Food            `json:"foods"`
+    MyID   string            `json:"myId,omitempty"`
 }
 ```
 
@@ -75,6 +77,9 @@ type GameState struct {
 ```
 グリッドサイズ: 20px × 20px
 フィールド: 800px × 600px = 40 × 30 マス
+tick間隔: 150ms（約7tick/秒）
+初期の長さ: 5マス
+エサ数: 5個
 
 蛇の1マスは 20×20 px の正方形
 エサも同じグリッド上に配置
@@ -121,6 +126,7 @@ step-06-snake/
 
 これらは後のステップで追加します。
 まずは「蛇が動いてエサを食べて伸びる」を動かします。
+壁は衝突ではなく、画面外に出たら反対側から出てくるラップアラウンドで処理しています。
 
 ---
 
@@ -175,9 +181,9 @@ function drawSnake(snake) {
 ## 練習問題
 
 1. **基本:** 蛇が動いてエサを食べて伸びることを確認する
-2. **応用:** 180度転換を禁止する（逆方向への転換を無効にする）
+2. **応用:** 180度転換を禁止している処理を外すとどう崩れるか観察する
 3. **応用:** エサを複数（3つなど）配置する
-4. **発展:** スコア（食べたエサの数）を表示する
+4. **発展:** スコア表示の見た目や並び順を変える
 
 ---
 

@@ -67,11 +67,13 @@ type Player struct {
 }
 ```
 
-### サーバーが持つゲーム状態
+### サーバーが送る状態メッセージ
 
 ```go
-type GameState struct {
-    Players map[string]*Player
+type ServerMessage struct {
+    Type    string             `json:"type"`
+    Players map[string]*Player `json:"players"`
+    MyID    string             `json:"myId,omitempty"`
 }
 ```
 
@@ -91,6 +93,12 @@ type GameState struct {
     "player-2": { "id": "player-2", "x": 300, "y": 150, "direction": "right", "color": "#4ecdc4" }
   }
 }
+```
+
+接続直後も同じ `"state"` メッセージ形式で、自分のIDだけを `myId` として受け取ります。
+
+```json
+{ "type": "state", "myId": "player-1", "players": {} }
 ```
 
 ---
@@ -138,6 +146,8 @@ step-04-server-state/
 3. タブ2でもブラウザを開いて接続
 4. どちらのタブでも矢印キーを押す
 5. **両方のタブで同じ位置情報が表示されること**を確認する
+
+実装では入力を受け取ったタイミングで `moveSpeed = 5.0` だけ移動し、その直後に全員へ状態を配信します。
 
 ---
 
