@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Step 8: 補間の視覚解説</title>
+  <style>
+    :root {
+      --bg: #10131a;
+      --panel: #171c25;
+      --panel-2: #1f2632;
+      --line: #313a49;
+      --text: #edf2f7;
+      --muted: #a6b0bf;
+      --accent: #31c6a4;
+      --blue: #63a4ff;
+      --yellow: #f3c969;
+      --red: #ff6d7a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(1120px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 36px;
+    }
+
+    header {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      max-width: 760px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .controls {
+      padding: 14px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    button {
+      height: 38px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: #07110f;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      color: var(--text);
+      background: var(--panel-2);
+      border-color: var(--line);
+    }
+
+    button:hover {
+      filter: brightness(1.08);
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .label-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+    }
+
+    .label-row strong {
+      color: var(--text);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .check input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      min-height: 68px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stage {
+      padding: 14px;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #0c1017;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      flex: 0 0 auto;
+    }
+
+    .explain {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .note {
+      padding: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .note h2 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    code {
+      color: var(--yellow);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    @media (max-width: 860px) {
+      .layout,
+      .explain {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+      .legend {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Step 8: 補間の視覚解説</h1>
+      <p class="lead">サーバーから届く離散的な位置を、クライアント側の毎フレーム描画でなめらかにつなぐ仕組みを確認できます。</p>
+    </header>
+
+    <section class="layout">
+      <aside class="panel controls">
+        <div class="button-row">
+          <button id="toggleBtn" type="button">停止</button>
+          <button id="resetBtn" type="button" class="secondary">リセット</button>
+        </div>
+
+        <label>
+          <span class="label-row">
+            <span>サーバー更新間隔</span>
+            <strong><span id="serverIntervalValue">700</span>ms</strong>
+          </span>
+          <input id="serverInterval" type="range" min="250" max="1400" step="50" value="700">
+        </label>
+
+        <label>
+          <span class="label-row">
+            <span>補間にかける時間</span>
+            <strong><span id="interpDurationValue">700</span>ms</strong>
+          </span>
+          <input id="interpDuration" type="range" min="100" max="1400" step="50" value="700">
+        </label>
+
+        <label>
+          <span class="label-row">
+            <span>描画速度</span>
+            <strong><span id="speedValue">1.0</span>x</strong>
+          </span>
+          <input id="speed" type="range" min="0.4" max="2.0" step="0.1" value="1.0">
+        </label>
+
+        <label class="check">
+          <input id="clampT" type="checkbox" checked>
+          <span><code>t</code> を 1.0 で止める</span>
+        </label>
+
+        <div class="metrics">
+          <div class="metric">
+            <span>補間係数 t</span>
+            <strong id="tValue">0.00</strong>
+          </div>
+          <div class="metric">
+            <span>受信 tick</span>
+            <strong id="tickValue">0</strong>
+          </div>
+          <div class="metric">
+            <span>開始 x</span>
+            <strong id="fromValue">80</strong>
+          </div>
+          <div class="metric">
+            <span>目標 x</span>
+            <strong id="toValue">200</strong>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel stage">
+        <canvas id="canvas" width="920" height="520" aria-label="補間の動きを示すキャンバス"></canvas>
+        <div class="legend">
+          <div class="legend-item"><span class="swatch" style="background: var(--yellow);"></span><span>サーバー状態</span></div>
+          <div class="legend-item"><span class="swatch" style="background: var(--red);"></span><span>補間なし</span></div>
+          <div class="legend-item"><span class="swatch" style="background: var(--accent);"></span><span>補間あり</span></div>
+          <div class="legend-item"><span class="swatch" style="background: var(--blue);"></span><span>次の目標</span></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="explain">
+      <div class="note">
+        <h2>サーバー更新</h2>
+        <p>サーバーは一定間隔で座標を送ります。受信タイミングの間には新しい座標が来ないため、そのまま描くと段階的に動きます。</p>
+      </div>
+      <div class="note">
+        <h2>線形補間</h2>
+        <p><code>lerp(a, b, t) = a + (b - a) * t</code> で、前回座標から今回座標までの中間位置を毎フレーム計算します。</p>
+      </div>
+      <div class="note">
+        <h2>外挿ではない</h2>
+        <p><code>t</code> を 1.0 で止めると、次の状態が来るまで目標地点で待ちます。チェックを外すと行き過ぎる様子を確認できます。</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const toggleBtn = document.getElementById('toggleBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const serverIntervalInput = document.getElementById('serverInterval');
+    const interpDurationInput = document.getElementById('interpDuration');
+    const speedInput = document.getElementById('speed');
+    const clampInput = document.getElementById('clampT');
+
+    const serverIntervalValue = document.getElementById('serverIntervalValue');
+    const interpDurationValue = document.getElementById('interpDurationValue');
+    const speedValue = document.getElementById('speedValue');
+    const tValue = document.getElementById('tValue');
+    const tickValue = document.getElementById('tickValue');
+    const fromValue = document.getElementById('fromValue');
+    const toValue = document.getElementById('toValue');
+
+    const path = [80, 200, 340, 500, 660, 820, 680, 520, 360, 180];
+    const rows = {
+      server: 110,
+      raw: 245,
+      interp: 380,
+    };
+
+    let running = true;
+    let lastFrame = performance.now();
+    let simTime = 0;
+    let nextServerTime = 0;
+    let tick = 0;
+    let pathIndex = 0;
+    let prevSnapshot = { x: path[0] };
+    let nextSnapshot = { x: path[1] };
+    let rawSnapshot = { x: path[0] };
+    let segmentStartTime = 0;
+
+    function numberValue(input) {
+      return Number(input.value);
+    }
+
+    function syncLabels() {
+      serverIntervalValue.textContent = serverIntervalInput.value;
+      interpDurationValue.textContent = interpDurationInput.value;
+      speedValue.textContent = Number(speedInput.value).toFixed(1);
+    }
+
+    function reset() {
+      simTime = 0;
+      nextServerTime = 0;
+      tick = 0;
+      pathIndex = 0;
+      prevSnapshot = { x: path[0] };
+      nextSnapshot = { x: path[1] };
+      rawSnapshot = { x: path[0] };
+      segmentStartTime = 0;
+    }
+
+    function receiveServerSnapshot() {
+      pathIndex = (pathIndex + 1) % path.length;
+      prevSnapshot = { x: getInterpolatedX() };
+      nextSnapshot = { x: path[pathIndex] };
+      rawSnapshot = { x: nextSnapshot.x };
+      segmentStartTime = simTime;
+      tick += 1;
+      nextServerTime += numberValue(serverIntervalInput);
+    }
+
+    function rawT() {
+      const duration = Math.max(numberValue(interpDurationInput), 1);
+      const value = (simTime - segmentStartTime) / duration;
+      return clampInput.checked ? Math.min(Math.max(value, 0), 1) : Math.max(value, 0);
+    }
+
+    function getInterpolatedX() {
+      const t = rawT();
+      return lerp(prevSnapshot.x, nextSnapshot.x, t);
+    }
+
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawGrid();
+      drawAxis(rows.server, 'サーバーから届いた座標');
+      drawAxis(rows.raw, '補間なし: 受信した瞬間に移動');
+      drawAxis(rows.interp, '補間あり: 毎フレーム lerp で移動');
+      drawPathMarkers();
+
+      drawSnapshot(nextSnapshot.x, rows.server, '#f3c969', '最新');
+      drawSnapshot(rawSnapshot.x, rows.raw, '#ff6d7a', 'raw');
+      drawSnapshot(nextSnapshot.x, rows.interp, '#63a4ff', '目標');
+      drawSnapshot(prevSnapshot.x, rows.interp, '#6f7785', '開始');
+      drawMovingPoint(getInterpolatedX(), rows.interp);
+      drawFormula();
+      drawTimeline();
+      updateMetrics();
+    }
+
+    function drawGrid() {
+      ctx.fillStyle = '#0c1017';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.lineWidth = 1;
+      for (let x = 40; x <= 880; x += 40) {
+        ctx.beginPath();
+        ctx.moveTo(x, 44);
+        ctx.lineTo(x, 430);
+        ctx.stroke();
+      }
+    }
+
+    function drawAxis(y, label) {
+      ctx.strokeStyle = '#313a49';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(50, y);
+      ctx.lineTo(870, y);
+      ctx.stroke();
+      ctx.fillStyle = '#a6b0bf';
+      ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(label, 54, y - 22);
+    }
+
+    function drawPathMarkers() {
+      for (const x of path) {
+        ctx.strokeStyle = 'rgba(243, 201, 105, 0.24)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, rows.server - 16);
+        ctx.lineTo(x, rows.interp + 28);
+        ctx.stroke();
+      }
+    }
+
+    function drawSnapshot(x, y, color, label) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#edf2f7';
+      ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, x, y + 32);
+      ctx.textAlign = 'start';
+    }
+
+    function drawMovingPoint(x, y) {
+      ctx.fillStyle = '#31c6a4';
+      ctx.beginPath();
+      ctx.arc(x, y, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#d7fff5';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+
+    function drawFormula() {
+      const t = rawT();
+      const clampedText = clampInput.checked ? 'Math.min(elapsed / duration, 1.0)' : 'elapsed / duration';
+      ctx.fillStyle = '#edf2f7';
+      ctx.font = '16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      ctx.fillText(`x = lerp(${prevSnapshot.x.toFixed(0)}, ${nextSnapshot.x.toFixed(0)}, ${t.toFixed(2)})`, 54, 470);
+      ctx.fillStyle = '#a6b0bf';
+      ctx.font = '13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      ctx.fillText(`t = ${clampedText}`, 54, 494);
+    }
+
+    function drawTimeline() {
+      const x = 530;
+      const y = 472;
+      const width = 330;
+      const t = clampInput.checked ? rawT() : Math.min(rawT(), 1);
+      ctx.strokeStyle = '#313a49';
+      ctx.lineWidth = 10;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + width, y);
+      ctx.stroke();
+      ctx.strokeStyle = '#31c6a4';
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + width * t, y);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      ctx.fillStyle = '#a6b0bf';
+      ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      ctx.fillText('0.0', x - 10, y + 28);
+      ctx.fillText('1.0', x + width - 10, y + 28);
+    }
+
+    function updateMetrics() {
+      const t = rawT();
+      tValue.textContent = t.toFixed(2);
+      tickValue.textContent = String(tick);
+      fromValue.textContent = prevSnapshot.x.toFixed(0);
+      toValue.textContent = nextSnapshot.x.toFixed(0);
+    }
+
+    function frame(now) {
+      const delta = now - lastFrame;
+      lastFrame = now;
+
+      if (running) {
+        simTime += delta * numberValue(speedInput);
+        while (simTime >= nextServerTime) {
+          receiveServerSnapshot();
+        }
+      }
+
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    toggleBtn.addEventListener('click', () => {
+      running = !running;
+      toggleBtn.textContent = running ? '停止' : '再生';
+    });
+
+    resetBtn.addEventListener('click', reset);
+
+    for (const input of [serverIntervalInput, interpDurationInput, speedInput]) {
+      input.addEventListener('input', syncLabels);
+    }
+
+    syncLabels();
+    reset();
+    requestAnimationFrame((now) => {
+      lastFrame = now;
+      requestAnimationFrame(frame);
+    });
+  </script>
+</body>
+</html>

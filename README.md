@@ -48,7 +48,7 @@
 | Step 5 | ゲームループを入れる | [step-05-game-loop](./step-05-game-loop/) |
 | Step 6 | 蛇ゲームにする | [step-06-snake](./step-06-snake/) |
 | Step 7 | 遅延と同期ズレを体験する | [step-07-lag](./step-07-lag/) |
-| Step 8 | 補間と予測を入れる | [step-08-interpolation](./step-08-interpolation/) |
+| Step 8 | 補間を入れる（予測は概念のみ） | [step-08-interpolation](./step-08-interpolation/) |
 | Step 9 | 10人部屋を作る | [step-09-rooms](./step-09-rooms/) |
 | Step 10 | 切断・再接続に対応する | [step-10-reconnect](./step-10-reconnect/) |
 | Step 11 | 最適化を考える | [step-11-optimization](./step-11-optimization/) |

@@ -1,4 +1,4 @@
-module step03-input
+module step01-echo
 
 go 1.21
 

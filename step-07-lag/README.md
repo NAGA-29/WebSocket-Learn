@@ -62,6 +62,9 @@ tick間隔（100ms ごとにしか送らない）
 
 **意図的に遅延・揺らぎ・メッセージ欠落を入れて、カクつきやワープを観察する。**
 
+現在の実装の初期値は `tickRate = 100ms`、`maxRandomDelayMs = 0`、`packetLossRate = 0.1` です。
+最初から 10% の `state` メッセージをスキップする設定になっています。
+
 ### 実験1: tick間隔を変える
 ```go
 // 通常
@@ -91,10 +94,10 @@ ws.onmessage = (event) => {
 `server/main.go` の `packetLossRate` を変更します。
 
 ```go
-// 通常
+// ロスなしにする
 packetLossRate = 0.0
 
-// 10% の state メッセージを送らない
+// 現在の初期値: 10% の state メッセージを送らない
 packetLossRate = 0.1
 
 // 30% の state メッセージを送らない

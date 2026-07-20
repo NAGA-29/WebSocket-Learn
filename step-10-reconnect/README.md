@@ -47,13 +47,16 @@
 サーバー → クライアント: ping（「生きてますか？」）
 クライアント → サーバー: pong（「生きてます」）
 
-設定例:
-  ping送信間隔: 30秒
-  pong待ちタイムアウト: 10秒（この間に返事が来なければ切断扱い）
+この実装の設定:
+  ping送信間隔: 10秒
+  pong待ちタイムアウト: 15秒
 ```
 
 WebSocket プロトコルには ping/pong フレームが組み込まれています。
 gorilla/websocket でも `SetPingHandler` / `SetPongHandler` で扱えます。
+
+`pongWait` は `pingInterval` より長くしています。
+ping を送る前に read deadline が切れてしまうと、正常な接続まで timeout 扱いになるためです。
 
 ---
 
@@ -67,14 +70,26 @@ conn.SetPongHandler(func(string) error {
     return nil
 })
 
-// 定期的に ping を送る
+// ping を定期送信する goroutine
+pingStop := make(chan struct{})
 go func() {
     ticker := time.NewTicker(pingInterval)
+    defer ticker.Stop()
+
     for {
-        <-ticker.C
-        conn.WriteMessage(websocket.PingMessage, nil)
+        select {
+        case <-ticker.C:
+            deadline := time.Now().Add(5 * time.Second)
+            if err := conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
+                return
+            }
+        case <-pingStop:
+            return
+        }
     }
 }()
+
+defer close(pingStop)
 
 // read deadline を設定（これを超えると ReadMessage がエラーを返す）
 conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -111,16 +126,24 @@ conn.SetReadDeadline(time.Now().Add(pongWait))
 
 ### クライアント側の再接続
 
+このステップのクライアントには、自動再接続の ON/OFF ボタンがあります。
+ON の状態で切断されると、3秒後に `connect()` を再実行します。
+
 ```javascript
 function connect() {
     ws = new WebSocket('ws://localhost:8080/ws');
 
     ws.onclose = () => {
         // 一定時間後に再接続を試みる
-        setTimeout(connect, 3000);
+        if (autoReconnect) {
+            setTimeout(connect, 3000);
+        }
     };
 }
 ```
+
+この実装は「パターン1: 切断したら別のプレイヤーとして再入場」です。
+再接続すると新しい `snake-N` が割り当てられ、以前の位置や状態は引き継ぎません。
 
 ---
 
@@ -142,8 +165,9 @@ step-10-reconnect/
 
 1. **観察:** タブを閉じてサーバーのログを見る。切断検知のタイミングを確認する
 2. **実験:** デバイスのWiFiをオフにしてからオンにする。タイムアウトまでの時間を計る
-3. **応用:** クライアントに自動再接続を実装する（3秒後に再接続）
-4. **発展:** セッションIDを使った再接続で、スコアを引き継ぐ処理を実装する
+3. **観察:** 自動再接続を ON にして、3秒後に新しいプレイヤーとして再入場することを確認する
+4. **応用:** `pingInterval` / `pongWait` を変更して、切断検知までの時間がどう変わるか確認する
+5. **発展:** セッションIDを使った再接続で、スコアを引き継ぐ処理を実装する
 
 ---
 

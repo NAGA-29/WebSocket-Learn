@@ -26,11 +26,12 @@
 ### ✅ 正しい設計：入力（意図）をクライアントが送る
 
 ```json
-{ "direction": "up" }
+{ "type": "input", "direction": "up" }
 ```
 
 利点：
 - クライアントは「どこに行きたいか」を伝えるだけ
+- `type` でメッセージ種別を明示できる
 - 実際に移動してよいかはサーバーが判断する
 - サーバーが「世界の真実」を持つ（これを **サーバー権威型設計** という）
 
@@ -120,18 +121,23 @@ step-03-input/
 ### サーバー側
 
 ```go
-// プレイヤーの状態（このステップでは入力だけ持つ）
-type PlayerInput struct {
-    PlayerID  string
-    Direction string
+type ClientMessage struct {
+    Type      string `json:"type"`
+    Direction string `json:"direction"`
+}
+
+type ServerMessage struct {
+    Type     string            `json:"type"`
+    PlayerID string            `json:"playerId"`
+    Inputs   map[string]string `json:"inputs"`
 }
 
 // プレイヤーごとの最新入力を保持
-var playerInputs = make(map[string]PlayerInput)
+var playerInputs = make(map[string]string)
 ```
 
 各接続に対して `playerID` を UUID などで割り当て、
-受け取った入力をその `playerID` に紐付けて保存します。
+受け取った方向文字列をその `playerID` に紐付けて保存します。
 
 ### クライアント側
 

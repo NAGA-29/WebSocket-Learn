@@ -45,6 +45,7 @@ type Room struct {
     Foods   []Food
     mu      sync.RWMutex
     stopCh  chan struct{} // ゲームループを止めるためのチャンネル
+    running bool
 }
 
 const MaxPlayersPerRoom = 10
@@ -65,12 +66,16 @@ const MaxPlayersPerRoom = 10
 ```go
 func findOrCreateRoom() *Room {
     for _, room := range rooms {
-        if len(room.Snakes) < MaxPlayersPerRoom {
+        if room.PlayerCount() < MaxPlayersPerRoom {
             return room
         }
     }
-    // 満室なら新しい部屋を作る
-    return createRoom()
+    // 満室なら新しい部屋を作って、ゲームループを1回だけ起動する
+    room := newRoom(nextRoomID())
+    rooms[room.ID] = room
+    room.running = true
+    go room.Start()
+    return room
 }
 ```
 
@@ -134,7 +139,8 @@ func handleWebSocket(c echo.Context) error {
     room := findOrCreateRoom()
     go room.Start() // ← 2回目の接続で2つ目のループが起動する
 ```
-対策：`room.running` フラグで管理し、起動済みなら起動しない
+対策：この実装では「部屋を新規作成したタイミング」だけ `go room.Start()` を呼びます。
+`running` フラグも持っていますが、既存部屋へ参加するときはゲームループを起動しません。
 
 ### 2. 部屋のロックを取りすぎる
 ```go
@@ -152,7 +158,7 @@ room.mu.Lock() // ← ロックの順番が違うと危険
 
 1. **基本:** 11人目が接続したとき、自動で2つ目の部屋が作られることを確認する
 2. **応用:** 部屋一覧をクライアントに表示する（部屋ID、現在人数）
-3. **応用:** 空になった部屋を自動で削除する
+3. **応用:** 空になった部屋が自動で削除され、ゲームループが止まることをログで確認する
 4. **発展:** プレイヤーが部屋番号を指定して入れるようにする
 
 ---

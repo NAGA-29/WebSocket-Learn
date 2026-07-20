@@ -3,7 +3,8 @@
 ## このステップの目標
 
 - 全量送信の限界を理解する
-- 差分送信の発想を持つ
+- フィールド名短縮による軽量化の効果を観測する
+- 差分送信を次の発展案として理解する
 - JSON のサイズと送信頻度を観測する
 
 ---
@@ -46,9 +47,38 @@ JSONオーバーヘッド（フィールド名など） = 200〜500バイト
 
 ---
 
-## 差分送信（Delta Compression）
+## このステップで実装していること
+
+この実装では、実際にクライアントへ送るデータは通常の全量 `state` メッセージです。
+同時にサーバー側で「フィールド名を短くした軽量版」を組み立て、全量版と軽量版のJSONサイズを比較します。
+軽量版そのものは送信せず、比較結果を `"stats"` メッセージとして送ります。
+
+```go
+type FullState struct {
+    Type   string                `json:"type"`
+    Snakes map[string]*FullSnake `json:"snakes"`
+    MyID   string                `json:"myId,omitempty"`
+}
+
+type LightState struct {
+    T    string                 `json:"t"`
+    S    map[string]*LightSnake `json:"s"`
+    MyID string                 `json:"myId,omitempty"`
+}
+
+type StatsMessage struct {
+    Type        string `json:"type"`        // "stats"
+    FullSize    int    `json:"fullSize"`
+    LightSize   int    `json:"lightSize"`
+    PlayerCount int    `json:"playerCount"`
+    TickCount   int64  `json:"tickCount"`
+}
+```
+
+## 差分送信（Delta Compression）は次の発展案
 
 **変化した部分だけを送る。**
+以下は考え方を示す疑似コードで、このステップの `main.go` にはまだ実装していません。
 
 ```go
 // 全量送信の例
@@ -64,7 +94,7 @@ type DeltaState struct {
     // 死んだ蛇のID（削除）
     RemovedSnakes []string           `json:"removed,omitempty"`
     // エサの変化（食べられたもの/新しく生えたもの）
-    UpdatedFoods  []FoodDelta        `json:"foods,omitempty"`
+    UpdatedFoods  []Food             `json:"foods,omitempty"`
 }
 ```
 
@@ -92,21 +122,25 @@ ws.onmessage = (event) => {
 
 ## 最適化の方向性
 
-### 1. 差分送信（最も効果が高い）
+### 1. フィールド名の短縮（このステップで比較）
+`"body"` を `"b"`、`"direction"` を `"d"` のように短くしてJSONのオーバーヘッドを減らす。
+効果は限定的ですが、実装が簡単でサイズ差を観測しやすい方法です。
+
+### 2. 差分送信（効果が高い）
 変化した部分だけを送る。実装が複雑になるが効果は大きい。
 
-### 2. 送信頻度の調整
+### 3. 送信頻度の調整
 重要度に応じて更新頻度を変える。
 - プレイヤーの位置: 100ms
 - スコアなどの状態: 1秒
 - 設定・ルームInfo: 変化時のみ
 
-### 3. JSONより軽量な形式を使う
+### 4. JSONより軽量な形式を使う
 - **MessagePack**: JSONの2〜5割サイズ削減
 - **プロトコルバッファ（protobuf）**: 更にコンパクト
 - **バイナリプロトコル**: 手作りで最小化（上級）
 
-### 4. 送信対象を絞る
+### 5. 送信対象を絞る
 視野内のデータだけ送る（大きなマップのゲームで効果的）
 
 ---
@@ -137,10 +171,10 @@ step-11-optimization/
 ### 実験3: フィールド名の省略
 ```json
 // 通常のJSON
-{"id":"snake-1","x":100,"y":200,"direction":"up"}
+{"id":"snake-1","body":[{"x":100,"y":200}],"direction":"up","color":"#ff6b6b"}
 
 // フィールド名を短縮
-{"i":"snake-1","x":100,"y":200,"d":"up"}
+{"i":"snake-1","b":[{"x":100,"y":200}],"d":"up","c":"#ff6b6b"}
 ```
 
 ---
