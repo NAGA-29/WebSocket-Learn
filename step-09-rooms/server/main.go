@@ -18,6 +18,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// 定数群
 const (
 	MaxPlayersPerRoom = 10
 	tickRate          = 150 * time.Millisecond
@@ -60,12 +61,12 @@ type RoomInfo struct {
 }
 
 type GameState struct {
-	Type    string             `json:"type"`
-	Snakes  map[string]*Snake  `json:"snakes"`
-	Foods   []Food             `json:"foods"`
-	MyID    string             `json:"myId,omitempty"`
-	RoomID  string             `json:"roomId"`
-	Count   int                `json:"count"`
+	Type   string            `json:"type"`
+	Snakes map[string]*Snake `json:"snakes"`
+	Foods  []Food            `json:"foods"`
+	MyID   string            `json:"myId,omitempty"`
+	RoomID string            `json:"roomId"`
+	Count  int               `json:"count"`
 }
 
 // ----- Room -----
@@ -145,10 +146,18 @@ func (r *Room) moveSnake(snake *Snake) {
 	case "right":
 		newHead = Point{X: head.X + gridSize, Y: head.Y}
 	}
-	if newHead.X < 0 { newHead.X = fieldWidth - gridSize }
-	if newHead.X >= fieldWidth { newHead.X = 0 }
-	if newHead.Y < 0 { newHead.Y = fieldHeight - gridSize }
-	if newHead.Y >= fieldHeight { newHead.Y = 0 }
+	if newHead.X < 0 {
+		newHead.X = fieldWidth - gridSize
+	}
+	if newHead.X >= fieldWidth {
+		newHead.X = 0
+	}
+	if newHead.Y < 0 {
+		newHead.Y = fieldHeight - gridSize
+	}
+	if newHead.Y >= fieldHeight {
+		newHead.Y = 0
+	}
 
 	snake.Body = append([]Point{newHead}, snake.Body...)
 
@@ -229,9 +238,9 @@ func (r *Room) PlayerCount() int {
 // ----- グローバル管理 -----
 
 var (
-	rooms      = make(map[string]*Room)
-	globalMu   sync.Mutex
-	roomCounter int
+	rooms        = make(map[string]*Room)
+	globalMu     sync.Mutex
+	roomCounter  int
 	snakeCounter int
 )
 
@@ -312,7 +321,7 @@ func handleWebSocket(c echo.Context) error {
 	body := []Point{}
 	for i := 0; i < initialSnakeLen; i++ {
 		body = append(body, Point{
-			X: float64((10-i) * gridSize),
+			X: float64((10 - i) * gridSize),
 			Y: float64(rand.Intn(fieldHeight/gridSize-1)*gridSize + gridSize),
 		})
 	}
